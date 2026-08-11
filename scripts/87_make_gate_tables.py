@@ -14,7 +14,7 @@ Tables:
   (vi)  mixing_envelope.csv      s* by d_latent, with the s=0 linear control
 
 Usage:
-    python causalbench/scripts/87_make_gate_tables.py [--outdir paper/tables]
+    python scripts/87_make_gate_tables.py [--outdir paper/tables]
 """
 import argparse
 import csv
@@ -27,7 +27,9 @@ HERE = Path(__file__).resolve().parent
 _spec = importlib.util.spec_from_file_location("_rio", HERE / "84_results_io.py")
 RIO = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(RIO)
 
-DEFAULT_OUT = HERE.parents[1] / "paper" / "tables"
+# scripts/ is at the repo root here, so the root is ONE level up.
+# parents[1] pointed outside the repository entirely.
+DEFAULT_OUT = HERE.parent / "paper" / "tables"
 SKIPPED = []
 
 

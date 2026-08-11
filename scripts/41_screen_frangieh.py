@@ -86,7 +86,7 @@ def _candidates(*names):
     env = _os.environ.get("PRECOND_DATA")
     if env:
         roots.append(("$PRECOND_DATA", _Path(env)))
-    roots += [("repo data/", _Path(__file__).resolve().parents[1] / "data"),
+    roots += [("repo data/", _Path(__file__).resolve().parent.parent / "data"),
               ("A100 project", _Path("/workspace/precondition-audit/data")),
               ("A100 legacy", _Path("/workspace/ranktest-diagnostics/data"))]
     return [(lbl, r.joinpath(*names) if names else r) for lbl, r in roots]
@@ -131,7 +131,7 @@ class _LazyPath:
 META_CSV = _LazyPath(frangieh_meta_csv)
 EXPR_CSV = _LazyPath(frangieh_expr_csv)
 
-CAUSALBENCH = _Path(__file__).resolve().parents[1]
+CAUSALBENCH = _Path(__file__).resolve().parent.parent
 SCREEN_DIR = CAUSALBENCH / "results/screen"
 
 SEED = 0

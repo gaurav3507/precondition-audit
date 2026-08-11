@@ -20,7 +20,7 @@ def _candidates(*names):
     env = _os.environ.get("PRECOND_DATA")
     if env:
         roots.append(("$PRECOND_DATA", _Path(env)))
-    roots += [("repo data/", _Path(__file__).resolve().parents[1] / "data"),
+    roots += [("repo data/", _Path(__file__).resolve().parent.parent / "data"),
               ("A100 project", _Path("/workspace/precondition-audit/data")),
               ("A100 legacy", _Path("/workspace/ranktest-diagnostics/data"))]
     return [(lbl, r.joinpath(*names) if names else r) for lbl, r in roots]
@@ -44,7 +44,7 @@ def resolve_data(*names, arg=None, what="data"):
 
 
 D = None          # resolved per call by load(); see resolve_data
-R = str(_Path(__file__).resolve().parents[1] / "results" / "screen")
+R = str(_Path(__file__).resolve().parent.parent / "results" / "screen")
 os.makedirs(R, exist_ok=True)
 
 RIDGE   = 1.0
