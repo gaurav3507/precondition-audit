@@ -8,7 +8,7 @@ data/
 # clone rebuild the spectrum figure without the A100, so they are kept
 # explicitly. A clone that cannot rebuild that figure is the exact failure this
 # negation prevents.
-!results/**/*__spectra.npz
+!results/**/*spectra.npz
 
 # noise
 .DS_Store
