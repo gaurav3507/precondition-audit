@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software or its artefacts, please cite it as below."
+type: software
+title: "A Precondition Audit of Benchmark Datasets for Multi-Environment Causal Representation Learning"
+abstract: >-
+  Code and committed artefacts for a precondition audit of the datasets used to
+  benchmark multi-environment causal representation learning: whether real
+  perturbation data satisfies the environment-count, latent-dimension and
+  spectrum assumptions that identifiability theorems require. Reports
+  descriptives and simulator gates only; no real-data rank-test result is
+  claimed.
+authors:
+  - family-names: Goyal
+    given-names: Gaurav
+  - family-names: Tiwari
+    given-names: Shailendra
+  - family-names: Khurana
+    given-names: Manju
+license: MIT
+repository-code: "https://github.com/gaurav3507/precondition-audit"
+keywords:
+  - causal representation learning
+  - identifiability
+  - perturbation data
+  - Perturb-seq
+  - reproducibility

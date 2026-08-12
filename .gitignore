@@ -10,6 +10,10 @@ data/
 # negation prevents.
 !results/**/*_spectra.npz
 
+# Per-stage run logs written by run_all.sh and the two batch runners. Generated,
+# never quoted, and a tree that goes dirty on every rebuild hides real changes.
+logs/
+
 # noise
 .DS_Store
 __pycache__/
