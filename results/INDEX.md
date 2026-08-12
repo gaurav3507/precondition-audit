@@ -1,17 +1,17 @@
 # ranktest results index
 
 ```
-generated : 2026-08-11T12:16:38Z
-generator : 89_make_index.py @ uncommitted
+generated : 2026-08-12T08:27:47Z
+generator : 89_make_index.py @ 11e9846
 root      : results
-artefacts : 34
+artefacts : 40
 ```
 
 Regenerate with `python causalbench/scripts/89_make_index.py`. Do not hand-edit.
 
 Quote only rows in **CURRENT**. Timestamps without a `Z` carry no timezone marker in the artefact and are shown verbatim.
 
-## CURRENT (22)
+## CURRENT (28)
 
 | statistic | gate | dataset | timestamp | commit | status | superseded_by | path |
 |---|---|---|---|---|---|---|---|
@@ -23,6 +23,12 @@ Quote only rows in **CURRENT**. Timestamps without a `Z` carry no timezone marke
 | descriptive | descriptives | frangieh (ifng) | 2026-08-11T07:47:30Z | `8181090` | CURRENT | - | `results/descriptives/2026-08-11T07-47-30Z__frangieh_ifng.json` |
 | descriptive | descriptives | hcp | 2026-08-11T07:47:38Z | `8181090` | CURRENT | - | `results/descriptives/2026-08-11T07-47-38Z__hcp.json` |
 | descriptive | descriptives | abide | 2026-08-11T07:47:45Z | `8181090` | CURRENT | - | `results/descriptives/2026-08-11T07-47-45Z__abide.json` |
+| descriptive | preprocessing_sweep | k562 | 2026-08-11T09:36:58Z | `9f2b1d5` | CURRENT | - | `results/preprocessing/2026-08-11T09-36-58Z__k562.json` |
+| descriptive | preprocessing_sweep | rpe1 | 2026-08-11T09:37:10Z | `9f2b1d5` | CURRENT | - | `results/preprocessing/2026-08-11T09-37-10Z__rpe1.json` |
+| descriptive | preprocessing_sweep | norman | 2026-08-11T09:39:00Z | `9f2b1d5` | CURRENT | - | `results/preprocessing/2026-08-11T09-39-00Z__norman.json` |
+| descriptive | preprocessing_sweep | frangieh_coculture | 2026-08-11T10:04:17Z | `9f2b1d5` | CURRENT | - | `results/preprocessing/2026-08-11T10-04-17Z__frangieh_coculture.json` |
+| descriptive | preprocessing_sweep | frangieh_control | 2026-08-11T10:23:05Z | `9f2b1d5` | CURRENT | - | `results/preprocessing/2026-08-11T10-23-05Z__frangieh_control.json` |
+| descriptive | preprocessing_sweep | frangieh_ifng | 2026-08-11T10:46:03Z | `9f2b1d5` | CURRENT | - | `results/preprocessing/2026-08-11T10-46-03Z__frangieh_ifng.json` |
 | lfc | alpha_sensitivity | n/a | 2026-08-10T11:02:09 (tz unmarked) | `117a464` | CURRENT | - | `results/gates/lfc/alpha_sensitivity/2026-08-10T11-02-09.json` |
 | lfc | battery | n/a | 2026-08-10T11:50:50 (tz unmarked) | `460a064` | CURRENT | - | `results/gates/lfc/battery/2026-08-10T11-50-50__gap_ratio_separation.json` |
 | lfc | envelope | n/a | 2026-08-10T12:30:44 (tz unmarked) | `bd2eecc` | CURRENT | - | `results/gates/lfc/envelope/2026-08-10T12-30-44.json` |

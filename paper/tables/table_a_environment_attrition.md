@@ -1,8 +1,8 @@
 # table_a_environment_attrition
 
 ```
-generated   : 2026-08-11T12:16:36Z
-generator   : 88_make_descriptive_tables.py @ uncommitted
+generated   : 2026-08-12T08:27:45Z
+generator   : 88_make_descriptive_tables.py @ 11e9846
 source dir  : results/descriptives
 artefacts   : 8 CURRENT, 0 skipped
   source    : 2026-08-11T06-12-06Z__k562.json   meta.git_commit=8181090
