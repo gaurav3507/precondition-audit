@@ -1,8 +1,8 @@
 # table_c_preprocessing_pr
 
 ```
-generated  : 2026-08-12T04:52:27Z
-generator  : 92_preprocessing_table.py @ 11e9846
+generated  : 2026-08-12T05:01:08Z
+generator  : 92_preprocessing_table.py @ 2c01e46
 source dir : results/preprocessing
 artefacts  : 6 CURRENT, 0 skipped
   source   : 2026-08-11T09-36-58Z__k562.json   meta.git_commit=9f2b1d5
@@ -13,20 +13,22 @@ artefacts  : 6 CURRENT, 0 skipped
   source   : 2026-08-11T10-46-03Z__frangieh_ifng.json   meta.git_commit=9f2b1d5
 ```
 
-| dataset | n_genes | n_control_used | raw | standardise | rank_int | spread_max_over_min |
-|---|---|---|---|---|---|---|
-| frangieh_coculture | 23712 | 2000 | 415.373 | 1116.87 | 2.14287 | 521.202 |
-| frangieh_control | 23712 | 2000 | 419.229 | 1092.73 | 2.20315 | 495.984 |
-| frangieh_ifng | 23712 | 2000 | 435.717 | 1174.3 | 1.94517 | 603.703 |
-| k562 | 1158 | 2000 | 455.507 | 482.537 | 63.9806 | 7.542 |
-| norman | 5000 | 2000 | 224.064 | 560.913 | 1.44491 | 388.199 |
-| rpe1 | 651 | 2000 | 234.461 | 326.375 | 30.8454 | 10.581 |
+| dataset | n_genes | n_control_used | frac_zero | raw_pr | raw_var95 | raw_top_share | standardise_pr | standardise_var95 | standardise_top_share | rank_int_pr | rank_int_var95 | rank_int_top_share | pr_spread_max_over_min |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| frangieh_coculture | 23712 | 2000 | 0.8552 | 415.373 | 1721 | 0.0411408 | 1116.87 | 1775 | 0.0169198 | 2.14287 | 1124 | 0.683028 | 521.202 |
+| frangieh_control | 23712 | 2000 | 0.851515 | 419.229 | 1725 | 0.0405146 | 1092.73 | 1776 | 0.0173434 | 2.20315 | 1135 | 0.673606 | 495.984 |
+| frangieh_ifng | 23712 | 2000 | 0.87666 | 435.717 | 1719 | 0.0398296 | 1174.3 | 1768 | 0.0152179 | 1.94517 | 1053 | 0.71692 | 603.703 |
+| k562 | 1158 | 2000 | 0.39673 | 455.507 | 800 | 0.020735 | 482.537 | 844 | 0.0210932 | 63.9806 | 798 | 0.117962 | 7.542 |
+| norman | 5000 | 2000 | 0.911175 | 224.064 | 700 | 0.0348401 | 560.913 | 1229 | 0.0156329 | 1.44491 | 355 | 0.831862 | 388.199 |
+| rpe1 | 651 | 2000 | 0.491675 | 234.461 | 496 | 0.0410761 | 326.375 | 533 | 0.029112 | 30.8454 | 499 | 0.173921 | 10.581 |
 
 > (a) The 'raw' arm is the control matrix exactly as the loader returns it, which is NOT raw counts. Every one of these matrices is already normalised by an undocumented upstream pipeline (runtime probe: input_kind = already_transformed; see docs/DATA_SOURCES.md). 'raw' records that this sweep applied no further transform, not that the input is untransformed.
 
 > (b) 'log1p_std' is NOT a preprocessing option for these data and is not a column. Because the input is already log-like, it would be a double log. The sweep refused the arm and recorded no value for it. It appears only in the diagnostic block below, which reports the refusal and its reason.
 
 > (c) Rank deficiency at the swept cap n_control_used = 2000: frangieh_coculture (p/n = 11.856), frangieh_control (p/n = 11.856), frangieh_ifng (p/n = 11.856), norman (p/n = 2.5). Participation ratio is dominated by the leading eigenvalues and is the estimator intended for comparison across datasets, but where p > n the trailing spectrum is sampling noise and the value is still a sample-size-dependent lower bound. Compare arms within a row; compare rows only at matched n.
+
+> (d) On zero-inflated matrices the rank-inverse-normal transform induces a single dominant eigendirection. Its variance share (rank_int top_share) increases monotonically with frac_zero across all 6 datasets, from 0.118 at frac_zero 0.3967 (k562) to 0.8319 at 0.9112 (norman), and that concentration is what depresses the rank_int participation ratio. n_components_for_variance at 95pct is not affected on the least-sparse datasets (raw vs rank_int: k562 800 vs 798; rpe1 496 vs 499), so the two estimators disagree about this arm and the participation ratio should not be read alone here.
 
 ### DIAGNOSTIC ARM - NOT A PREPROCESSING OPTION, NOT PART OF THE TABLE ABOVE
 

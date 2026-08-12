@@ -3,12 +3,20 @@
 Reads only CURRENT artefacts under results/preprocessing/. Runs nothing.
 Emits markdown + CSV to paper/tables/.
 
-Two tables, same shape: rows = dataset, columns = the THREE preprocessing
-options, never four.
-  table_c_preprocessing_pr        participation ratio, plus a spread column
-                                  (max/min across the three options)
+Two tables, rows = dataset, columns = the THREE preprocessing options, never
+four.
+  table_c_preprocessing_pr        three estimators per arm side by side:
+                                  participation ratio, the 95pct
+                                  variance-threshold count, and the top
+                                  eigenvalue share, plus frac_zero and the PR
+                                  spread (max/min across the three options)
   table_d_preprocessing_numrank   numerical rank at tol 1e-10, with the
                                   rank bound alongside
+
+WHY TABLE C CARRIES THREE ESTIMATORS. Participation ratio and the 95pct count
+disagree about the rank_int arm, and reporting only the first would present a
+concentration effect as a dimension estimate. Both are shown so the reader can
+see where they diverge and where they do not.
 
 THE FOURTH ARM IS NOT A COLUMN. The sweep ran four arms but only three are
 preprocessing choices. Every input matrix probes as already log-transformed
@@ -50,6 +58,14 @@ DIAG_ARMS = tuple(a for a in ARMS if a not in BODY_ARMS)
 # Per-dataset metadata carried alongside the arms. Constant across arms by
 # construction (same control matrix, same cap), which is asserted at load.
 META_COLS = ("n_genes", "n_control_used")
+
+# Table C reports three estimators per arm. (column suffix, accessor) pairs;
+# the accessor takes one arms_result entry and returns the value or None.
+C_FIELDS = (
+    ("pr", lambda r: r.get("participation_ratio")),
+    ("var95", lambda r: (r.get("n_components_for_variance") or {}).get("95pct")),
+    ("top_share", lambda r: r.get("top_eigenvalue_share")),
+)
 
 
 def utc_now():
@@ -160,6 +176,87 @@ def build(kept, field, extra_cols=()):
     return rows
 
 
+def build_multi(kept):
+    """Table C: metadata, frac_zero, then three estimators for each arm.
+
+    Column order groups by arm, not by estimator, so a row reads as three
+    self-contained descriptions of the same control matrix under three
+    preprocessing choices.
+    """
+    rows = []
+    for _, doc in kept:
+        res = doc.get("arms_result") or {}
+        m = meta_of(doc)
+        row = {"dataset": doc.get("dataset", NA)}
+        for c in META_COLS:
+            row[c] = m.get(c)
+        row["frac_zero"] = (doc.get("loader_probe") or {}).get("frac_zero")
+        prs = []
+        for arm in BODY_ARMS:
+            r = res.get(arm) or {}
+            ok = r.get("status") == "ok"
+            for suffix, get in C_FIELDS:
+                v = get(r) if ok else None
+                row[f"{arm}_{suffix}"] = NA if v is None else v
+                if ok and suffix == "pr" and v is not None:
+                    prs.append(float(v))
+        row["pr_spread_max_over_min"] = (round(max(prs) / min(prs), 3)
+                                         if len(prs) == len(BODY_ARMS)
+                                         and min(prs) > 0 else NA)
+        rows.append(row)
+    rows.sort(key=lambda r: str(r["dataset"]))
+    return rows
+
+
+def sparsity_note(kept):
+    """The rank_int concentration note, recomputed from the artefacts.
+
+    The monotonicity is checked here rather than asserted in prose, so the
+    note cannot outlive the fact it states: if a future batch breaks the
+    ordering the note says so instead of repeating a claim that has stopped
+    being true.
+    """
+    obs = []
+    for _, doc in kept:
+        r = (doc.get("arms_result") or {}).get("rank_int") or {}
+        if r.get("status") != "ok":
+            continue
+        raw = (doc.get("arms_result") or {}).get("raw") or {}
+        obs.append((
+            (doc.get("loader_probe") or {}).get("frac_zero"),
+            doc.get("dataset"),
+            r.get("top_eigenvalue_share"),
+            (raw.get("n_components_for_variance") or {}).get("95pct"),
+            (r.get("n_components_for_variance") or {}).get("95pct"),
+        ))
+    obs = sorted(o for o in obs if o[0] is not None and o[2] is not None)
+    if len(obs) < 2:
+        return ("(d) Too few coherent rank_int arms to describe the sparsity "
+                "relationship.")
+    shares = [o[2] for o in obs]
+    mono = all(b > a for a, b in zip(shares, shares[1:]))
+    lo, hi = obs[0], obs[-1]
+    trend = ("increases monotonically with frac_zero across all "
+             f"{len(obs)} datasets" if mono else
+             f"does NOT increase monotonically with frac_zero across all "
+             f"{len(obs)} datasets (ordering broken; the claim below held for "
+             f"the 2026-08-11T09-36-58Z batch and does not hold for this one)")
+    unaffected = [o for o in obs if o[3] is not None and o[4] is not None
+                  and abs(o[4] - o[3]) <= 3]
+    unaff_txt = ("; ".join(f"{o[1]} {o[3]} vs {o[4]}" for o in unaffected)
+                 if unaffected else "none")
+    return (
+        "(d) On zero-inflated matrices the rank-inverse-normal transform "
+        "induces a single dominant eigendirection. Its variance share "
+        f"(rank_int top_share) {trend}, from {lo[2]:.4g} at frac_zero "
+        f"{lo[0]:.4g} ({lo[1]}) to {hi[2]:.4g} at {hi[0]:.4g} ({hi[1]}), and "
+        "that concentration is what depresses the rank_int participation "
+        "ratio. n_components_for_variance at 95pct is not affected on the "
+        f"least-sparse datasets (raw vs rank_int: {unaff_txt}), so the two "
+        "estimators disagree about this arm and the participation ratio "
+        "should not be read alone here.")
+
+
 def diagnostic_rows(kept):
     """The arms that are not preprocessing options, one row per dataset.
 
@@ -227,6 +324,7 @@ def table_notes(kept, which):
             "datasets, but where p > n the trailing spectrum is sampling "
             "noise and the value is still a sample-size-dependent lower bound. "
             "Compare arms within a row; compare rows only at matched n.")
+        notes.append(sparsity_note(kept))
     else:
         notes.append(
             f"(c) Rank deficiency at the swept cap n_control_used = {cap}: "
@@ -333,7 +431,7 @@ def main():
         return
     diag = diagnostic_rows(kept)
     write_outputs("table_c_preprocessing_pr",
-                  build(kept, "participation_ratio"), head,
+                  build_multi(kept), head,
                   table_notes(kept, "pr"), diag, a.outdir)
     write_outputs("table_d_preprocessing_numrank",
                   build(kept, "numerical_rank", ("rank_bound",)), head,
