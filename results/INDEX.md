@@ -1,17 +1,17 @@
 # ranktest results index
 
 ```
-generated : 2026-08-12T08:27:47Z
+generated : 2026-08-20T05:33:16Z
 generator : 89_make_index.py @ 11e9846
 root      : results
-artefacts : 40
+artefacts : 42
 ```
 
 Regenerate with `python causalbench/scripts/89_make_index.py`. Do not hand-edit.
 
 Quote only rows in **CURRENT**. Timestamps without a `Z` carry no timezone marker in the artefact and are shown verbatim.
 
-## CURRENT (28)
+## CURRENT (30)
 
 | statistic | gate | dataset | timestamp | commit | status | superseded_by | path |
 |---|---|---|---|---|---|---|---|
@@ -32,8 +32,10 @@ Quote only rows in **CURRENT**. Timestamps without a `Z` carry no timezone marke
 | lfc | alpha_sensitivity | n/a | 2026-08-10T11:02:09 (tz unmarked) | `117a464` | CURRENT | - | `results/gates/lfc/alpha_sensitivity/2026-08-10T11-02-09.json` |
 | lfc | battery | n/a | 2026-08-10T11:50:50 (tz unmarked) | `460a064` | CURRENT | - | `results/gates/lfc/battery/2026-08-10T11-50-50__gap_ratio_separation.json` |
 | lfc | envelope | n/a | 2026-08-10T12:30:44 (tz unmarked) | `bd2eecc` | CURRENT | - | `results/gates/lfc/envelope/2026-08-10T12-30-44.json` |
+| lfc | envelope | n/a | 2026-08-10T12:30:44 (tz unmarked) | `bd2eecc` | CURRENT | - | `results/gates/lfc/envelope/2026-08-10T12-30-44__decay_parsed.json` |
 | lfc | envelope | n/a | 2026-08-10T12:30:44 (tz unmarked) | `bd2eecc` | CURRENT | - | `results/gates/lfc/envelope/2026-08-10T12-30-44__decay_raw_log.json` |
 | lfc | envelope | n/a | 2026-08-10T12:30:44 (tz unmarked) | `bd2eecc` | CURRENT | - | `results/gates/lfc/envelope/2026-08-10T12-30-44__s0_linear_control.json` |
+| lfc | envelope | n/a | 2026-08-10T12:30:44 (tz unmarked) | `bd2eecc` | CURRENT | - | `results/gates/lfc/envelope/2026-08-10T12-30-44__s0_linear_control_parsed.json` |
 | lfc | envelope | n/a | 2026-08-10T13:20:00 (tz unmarked) | `4ddd503` | CURRENT | - | `results/gates/lfc/envelope/2026-08-10T13-20-00__linear_dim_boundary.json` |
 | lfc | envelope | n/a | 2026-08-10T13:20:01 (tz unmarked) | `4ddd503` | CURRENT | - | `results/gates/lfc/envelope/2026-08-10T13-20-01__linear_dim_over_n.json` |
 | lfc | gate0 | n/a | 2026-08-10T10:44:42 (tz unmarked) | `928fed1` | CURRENT | - | `results/gates/lfc/gate0/2026-08-10T10-44-42.json` |
