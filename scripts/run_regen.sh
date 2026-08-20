@@ -14,7 +14,7 @@
 #
 # Jobs, in order. The audit runs first: it is the cheaper of the two and its
 # step-0 gate is the one that catches a bad $PRECOND_DATA.
-#   control_pool  92_control_pool_audit.py    needs $PRECOND_DATA
+#   control_pool  94_control_pool_audit.py    needs $PRECOND_DATA
 #   power_soft    93_regen_power_curves.py    simulator only, no data
 #   power_hard    93_regen_power_curves.py    simulator only, no data
 #
@@ -41,7 +41,7 @@ REGEN_DIR="$RESULTS/regen"
 RNG_ORDER="${RNG_ORDER:-full}"
 LOCKFILE="${LOCKFILE:-$LOGS/run_regen.lock}"
 
-AUDIT="$SCRIPTS/92_control_pool_audit.py"
+AUDIT="$SCRIPTS/94_control_pool_audit.py"
 POWER="$SCRIPTS/93_regen_power_curves.py"
 
 mkdir -p "$LOGS" "$REGEN_DIR"
@@ -72,7 +72,7 @@ fi
 # 92 needs the data; the two power arms do not. Fail here rather than after the
 # power arms have already burned an hour.
 if [ "${SKIP_AUDIT:-0}" != "1" ] && [ -z "${PRECOND_DATA:-}" ]; then
-  echo "[fatal] \$PRECOND_DATA is not set, and 92_control_pool_audit.py needs it." >&2
+  echo "[fatal] \$PRECOND_DATA is not set, and 94_control_pool_audit.py needs it." >&2
   echo "        Candidate roots 92 will try, in order:" >&2
   echo "          1. \$PRECOND_DATA                              (unset)" >&2
   echo "          2. $PROJ/data" >&2
