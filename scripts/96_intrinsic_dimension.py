@@ -51,7 +51,8 @@ Usage (A100, cb venv). Long run; Claude Code cannot execute it:
 
 Env:
     PRECOND_DATA      raw data root; required for the real-data pass.
-    PRECOND_EXTERNAL  third-party checkouts (Norman); see 94_control_pool_audit.
+    PRECOND_EXTERNAL  third-party checkouts (Norman AND Frangieh). Resolution is
+                      94_control_pool_audit.py's, imported, never reimplemented here.
 """
 import argparse
 import json
@@ -574,6 +575,95 @@ def step0_synthetic_gate():
     return gate
 
 
+# ======================================================== calibration inversion
+# Anchors. The inversion is fitted on the two CALIBRATION cases only. Case 1
+# (d = 10) is deliberately excluded: there the estimator is nearly unbiased
+# (TwoNN ratio ~0.96) and the relation between estimate and truth is not the
+# same one that holds where the estimator is censoring. Including it would bend
+# the curve through a regime it does not describe.
+INVERSION_ANCHOR_CASES = tuple(f"{i}_linear_gaussian_d{d}"
+                               for i, d in enumerate(SYN_CALIBRATION_LATENTS,
+                                                     start=4))
+INVERSION_EXCLUDES = "1_linear_gaussian"
+
+
+def fit_inversion(gate):
+    """Per estimator, a power law d_true = A * est^B through the two anchors.
+
+    Two anchors, two parameters, so the fit is exact through both and carries no
+    residual. That is a statement about the construction, not about quality: it
+    is an interpolation between d = 200 and d = 450 and nothing more.
+    """
+    by_case = {c["case"]: c for c in gate["cases"]}
+    anchors = [by_case[c] for c in INVERSION_ANCHOR_CASES if c in by_case]
+    out = {"anchor_cases": list(INVERSION_ANCHOR_CASES),
+           "anchor_truths": [float(c["expected"]) for c in anchors],
+           "excluded_case": INVERSION_EXCLUDES,
+           "exclusion_reason": (
+               "d = 10 is excluded from the fit. There the estimator is nearly "
+               "unbiased and the estimate-to-truth relation is not the one that "
+               "holds in the censoring regime the anchors sample. The inversion "
+               "does NOT extend to it and must not be applied there."),
+           "form": "d_true = A * estimate ** B, exact through the two anchors",
+           "calibration_p": SYN_P,
+           "calibration_n": SYN_N,
+           "per_estimator": {}}
+    if len(anchors) != 2:
+        out["error"] = "need exactly two anchor cases; inversion not fitted"
+        return out
+    t1, t2 = (float(anchors[0]["expected"]), float(anchors[1]["expected"]))
+    for name in anchors[0]["estimators"]["point_estimates"]:
+        e1 = anchors[0]["estimators"]["point_estimates"].get(name)
+        e2 = anchors[1]["estimators"]["point_estimates"].get(name)
+        if e1 is None or e2 is None or e1 <= 0 or e2 <= 0 or e1 == e2:
+            out["per_estimator"][name] = dict(
+                A=None, B=None,
+                reason="anchors missing, non-positive, or not distinct")
+            continue
+        B = float(np.log(t2 / t1) / np.log(e2 / e1))
+        A = float(t1 / (e1 ** B))
+        out["per_estimator"][name] = dict(
+            A=A, B=B, anchor_estimates=[float(e1), float(e2)],
+            anchor_truths=[t1, t2],
+            valid_estimate_range=[float(min(e1, e2)), float(max(e1, e2))])
+    return out
+
+
+def invert(inv, name, estimate, p_condition):
+    """Implied true dimension for one estimate, with its caveats attached."""
+    rec = (inv.get("per_estimator") or {}).get(name) or {}
+    A, B = rec.get("A"), rec.get("B")
+    if A is None or B is None or estimate is None or estimate <= 0:
+        return dict(implied_true_dimension=None,
+                    reason=rec.get("reason", "no estimate"))
+    lo, hi = rec["valid_estimate_range"]
+    tol = 1e-9 * max(abs(lo), abs(hi), 1.0)      # an endpoint is inside
+    outside = not (lo - tol <= estimate <= hi + tol)
+    below = estimate < lo - tol
+    return dict(
+        implied_true_dimension=float(A * (estimate ** B)),
+        raw_estimate=float(estimate),
+        A=A, B=B,
+        anchor_estimate_range=[lo, hi],
+        outside_anchor_range=bool(outside),
+        extrapolation=bool(outside or int(p_condition) != int(SYN_P)),
+        extrapolation_reasons=[
+            r for r in (
+                ("estimate outside the anchored range "
+                 f"[{lo:.2f}, {hi:.2f}]") if outside else None,
+                ("estimate is BELOW the anchored range, heading towards the "
+                 f"d={SYN_LATENT} regime where the estimator is nearly "
+                 f"unbiased and this power law does not hold. The implied "
+                 f"value there is not meaningful.") if below else None,
+                (f"this condition has p={p_condition}, the calibration was "
+                 f"fitted at p={SYN_P}") if int(p_condition) != int(SYN_P)
+                else None,
+            ) if r],
+        note=("Fitted on the d=200 and d=450 anchors only; the fit does not "
+              "extend to d=10, where the estimator is nearly unbiased."),
+    )
+
+
 # ================================================================= real data
 def committed_pr(AUD, dataset, arm, n):
     """The committed participation ratio for this (dataset, arm, n), or None.
@@ -603,7 +693,7 @@ def committed_pr(AUD, dataset, arm, n):
     return None, None, "no committed standardise PR at this n"
 
 
-def run_condition(AUD, SW, DESC, dataset, args, gate):
+def run_condition(AUD, SW, DESC, dataset, args, gate, inv):
     a = argparse.Namespace(hvg=args.hvg, seed=args.seed)
     Xc, rng, X_full, paths = AUD.control_matrix(DESC, dataset, a)
     n_all, p = Xc.shape
@@ -635,6 +725,7 @@ def run_condition(AUD, SW, DESC, dataset, args, gate):
             pe = est["point_estimates"]
             ratios = {k: (None if pr in (None, 0) or v is None else float(v) / pr)
                       for k, v in pe.items()}
+            implied = {k: invert(inv, k, v, p) for k, v in pe.items()}
             out.append(dict(
                 dataset=dataset, n_requested=int(n), n_used=int(n), arm=arm,
                 status="ok",
@@ -644,16 +735,27 @@ def run_condition(AUD, SW, DESC, dataset, args, gate):
                 participation_ratio_source=pr_src,
                 participation_ratio_note=pr_why,
                 intrinsic_over_participation=ratios,
+                implied_true_dimension=implied,
+                implied_over_participation={
+                    k: (None if pr in (None, 0)
+                        or implied[k]["implied_true_dimension"] is None
+                        else implied[k]["implied_true_dimension"] / pr)
+                    for k in pe},
                 headline=dict(
                     twonn=pe.get("twonn"),
                     twonn_over_pr=ratios.get("twonn"),
                     estimator_spread=est.get("estimator_spread_max_over_min"),
                     estimators_disagree=est.get("estimators_disagree"),
+                    twonn_implied=implied.get("twonn", {}).get(
+                        "implied_true_dimension"),
+                    twonn_implied_is_extrapolation=implied.get(
+                        "twonn", {}).get("extrapolation"),
                 ),
             ))
             hp = out[-1]["headline"]
-            print(f"        twonn={hp['twonn']}  PR={pr}  "
-                  f"ratio={hp['twonn_over_pr']}  "
+            print(f"        twonn={hp['twonn']}  implied={hp['twonn_implied']}"
+                  f"{' (extrap)' if hp['twonn_implied_is_extrapolation'] else ''}"
+                  f"  PR={pr}  ratio={hp['twonn_over_pr']}  "
                   f"spread={hp['estimator_spread']}", flush=True)
     return prov, out
 
@@ -687,7 +789,9 @@ def main():
         if d not in AUD.DATASETS:
             sys.exit(f"[fatal] unknown dataset {d!r}; expected one of "
                      f"{AUD.DATASETS}")
-    AUD.step0_gate(todo)              # data presence, provenance, loud on miss
+    resolution = AUD.step0_gate(todo)  # data presence, provenance, loud on miss
+    if resolution is None:            # older 94 returned nothing
+        resolution = []
 
     LOCKFILE.parent.mkdir(parents=True, exist_ok=True)
     if LOCKFILE.exists():
@@ -717,36 +821,11 @@ def main():
         out.mkdir(parents=True, exist_ok=True)
 
         DESC = _load(HERE / "85_dataset_descriptives.py", "_descriptives")
-        records, prov_by_ds, failed = [], {}, []
-        for ds in todo:
-            print(f"\n--- [{ds}] ---", flush=True)
-            try:
-                prov, recs = run_condition(AUD, SW, DESC, ds, args, gate)
-            except Exception as e:                       # noqa: BLE001
-                print(f"    FAILED: {type(e).__name__}: {e}", flush=True)
-                failed.append((ds, f"{type(e).__name__}: {e}"))
-                continue
-            prov_by_ds[ds] = prov
-            records.extend(recs)
-
-        want = len(todo) * len(N_GRID) * len(ARMS)
-        got = sum(1 for r in records if r.get("status") == "ok")
-        if failed or got != want:
-            print(f"\n[fatal] SHORTFALL: {got} record(s) for {want} requested "
-                  f"({len(todo)} conditions x {len(N_GRID)} sample sizes x "
-                  f"{len(ARMS)} arms).", file=sys.stderr)
-            for d, why in failed:
-                print(f"  - {d}: {why}", file=sys.stderr)
-            print("        This run is INCOMPLETE. Do not read the artefact as "
-                  "a full sweep.", file=sys.stderr)
-            sys.exit(1)
-
-        disagree = [r for r in records
-                    if r.get("status") == "ok" and r["headline"].get(
-                        "estimators_disagree")]
-        ts = DESC.utc_stamp()
-        payload = dict(
+        inv = fit_inversion(gate)
+        common = dict(
             step0_synthetic_gate=gate,
+            calibration_inversion=inv,
+            resolution_report=resolution,
             config=dict(n_grid=list(N_GRID), arms=list(ARMS),
                         mle_k=list(MLE_K), twonn_discard=TWONN_DISCARD,
                         corrdim_percentiles=list(CORRDIM_PCTL),
@@ -756,26 +835,52 @@ def main():
                         disagree_factor=DISAGREE_FACTOR, seed=args.seed,
                         rank_int_excluded=("deliberate: not an admissible "
                                            "preprocessing arm for these data")),
-            provenance=prov_by_ds,
-            records=records,
-            n_configurations_with_estimator_disagreement=len(disagree),
-            disagreement_note=(
-                f"An estimator spread above {DISAGREE_FACTOR:g}x is reported as "
-                f"the finding, not resolved by preferring one estimator. "
-                f"{len(disagree)} of {got} configurations exceed it."),
             contains_no_test=True,
             disclaimer=("DESCRIPTIVE ONLY. No rank test was run and no "
                         "assumption verdict is expressed or implied."),
             audit_script_sha256=AUD.sha256(AUDIT),
         )
-        path = out / f"{ts.replace(':', '-')}__intrinsic_dimension.json"
-        path.write_text(json.dumps(payload, indent=2) + "\n")
-        print(f"\n[write] {path}", flush=True)
 
-        print("\n" + "=" * 96)
-        print(f" {'dataset':<20}{'n':>6}{'arm':<14}{'TwoNN':>9}"
-              f"{'p05-p95':>18}{'PR':>11}{'ratio':>9}{'disagree':>10}")
-        print("-" * 96)
+        records, failed, written = [], [], []
+        for ds in todo:
+            print(f"\n--- [{ds}] ---", flush=True)
+            try:
+                prov, recs = run_condition(AUD, SW, DESC, ds, args, gate, inv)
+            except Exception as e:                       # noqa: BLE001
+                # ONE ARTEFACT PER CONDITION, WRITTEN AS IT COMPLETES. A batch
+                # that wrote only at the end lost three finished conditions to a
+                # Frangieh path failure and left results/intrinsic/ empty. A
+                # later condition failing must never discard an earlier one.
+                print(f"    FAILED: {type(e).__name__}: {e}", flush=True)
+                failed.append((ds, f"{type(e).__name__}: {e}"))
+                continue
+            ok_here = sum(1 for r in recs if r.get("status") == "ok")
+            payload = dict(common)
+            payload.update(
+                dataset=ds,
+                provenance=prov,
+                records=recs,
+                n_configurations=ok_here,
+                n_configurations_expected=len(N_GRID) * len(ARMS),
+                complete=bool(ok_here == len(N_GRID) * len(ARMS)),
+                n_configurations_with_estimator_disagreement=sum(
+                    1 for r in recs if r.get("status") == "ok"
+                    and r["headline"].get("estimators_disagree")),
+            )
+            ts = DESC.utc_stamp()
+            path = out / f"{ts.replace(':', '-')}__{ds}__intrinsic.json"
+            path.write_text(json.dumps(payload, indent=2) + "\n")
+            written.append(path)
+            print(f"    [write] {path}  "
+                  f"({ok_here}/{len(N_GRID) * len(ARMS)} configurations)",
+                  flush=True)
+            records.extend(recs)
+
+        print("\n" + "=" * 118)
+        print(f" {'dataset':<20}{'n':>6}{'arm':<14}{'TwoNN':>9}{'p05-p95':>16}"
+              f"{'implied':>10}{'ext':>5}{'PR':>10}{'ratio':>8}"
+              f"{'impl/PR':>9}{'disagree':>10}")
+        print("-" * 118)
         for r in records:
             if r.get("status") != "ok":
                 print(f" {r['dataset']:<20}{r['n_requested']:>6}"
@@ -783,18 +888,49 @@ def main():
                 continue
             b = (r["bootstrap"]["per_estimator"].get("twonn") or {})
             rng_s = ("-" if b.get("p05") is None
-                     else f"{b['p05']:.2f}-{b['p95']:.2f}")
+                     else f"{b['p05']:.1f}-{b['p95']:.1f}")
             pr = r["participation_ratio"]
             ra = r["headline"]["twonn_over_pr"]
+            im = r["headline"]["twonn_implied"]
+            ip = r["implied_over_participation"].get("twonn")
             print(f" {r['dataset']:<20}{r['n_requested']:>6}{r['arm']:<14}"
-                  f"{r['headline']['twonn']:>9.2f}{rng_s:>18}"
-                  f"{('-' if pr is None else f'{pr:.1f}'):>11}"
-                  f"{('-' if ra is None else f'{ra:.4f}'):>9}"
+                  f"{r['headline']['twonn']:>9.2f}{rng_s:>16}"
+                  f"{('-' if im is None else f'{im:.1f}'):>10}"
+                  f"{('yes' if r['headline']['twonn_implied_is_extrapolation'] else 'no'):>5}"
+                  f"{('-' if pr is None else f'{pr:.1f}'):>10}"
+                  f"{('-' if ra is None else f'{ra:.3f}'):>8}"
+                  f"{('-' if ip is None else f'{ip:.3f}'):>9}"
                   f"{str(r['headline']['estimators_disagree']):>10}")
-        print("-" * 96)
+        print("-" * 118)
+        got = sum(1 for r in records if r.get("status") == "ok")
+        disagree = sum(1 for r in records if r.get("status") == "ok"
+                       and r["headline"].get("estimators_disagree"))
+        print(f" artefacts written: {len(written)} of {len(todo)} conditions")
         print(f" configurations with estimator spread > "
-              f"{DISAGREE_FACTOR:g}x: {len(disagree)} of {got}")
-        print("=" * 96)
+              f"{DISAGREE_FACTOR:g}x: {disagree} of {got}")
+        print(f" 'implied' inverts the d={SYN_CALIBRATION_LATENTS[0]}/"
+              f"{SYN_CALIBRATION_LATENTS[1]} calibration; 'ext' marks an "
+              f"extrapolation outside the anchors or off p={SYN_P}.")
+        print("=" * 118)
+
+        # Assertion LAST, after every artefact is on disk, so a shortfall is
+        # reported without discarding what did complete.
+        on_disk = sorted(out.glob("*__intrinsic.json"))
+        want = len(todo) * len(N_GRID) * len(ARMS)
+        if failed or got != want or len(on_disk) != len(todo):
+            print(f"\n[fatal] SHORTFALL: {got} configuration(s) for {want} "
+                  f"requested ({len(todo)} conditions x {len(N_GRID)} sample "
+                  f"sizes x {len(ARMS)} arms); {len(on_disk)} artefact(s) on "
+                  f"disk for {len(todo)} condition(s).", file=sys.stderr)
+            for d, why in failed:
+                print(f"  - {d}: {why}", file=sys.stderr)
+            for q in on_disk:
+                print(f"  kept: {q}", file=sys.stderr)
+            print("        The artefacts above ARE complete for their own "
+                  "condition and are not discarded.", file=sys.stderr)
+            print("        This run is INCOMPLETE as a sweep. Rerun only the "
+                  "missing conditions with --dataset.", file=sys.stderr)
+            sys.exit(1)
     finally:
         if LOCKFILE.exists():
             LOCKFILE.unlink()

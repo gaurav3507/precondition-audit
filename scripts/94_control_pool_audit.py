@@ -93,6 +93,19 @@ NORMAN_FILENAME = "Norman2019_raw.h5ad"
 NORMAN_CANDIDATE_CAP = 2000     # the cap the published Norman number is quoted at
 DEFAULT_EXTERNAL = "/workspace/external"   # $PRECOND_EXTERNAL default
 
+# Third-party trees whose layout does not match the $PRECOND_DATA convention,
+# relative to $PRECOND_EXTERNAL. Norman is irregular (the doubled
+# datasets/datasets/); Frangieh is regular but simply lives outside the data
+# root. Both are handled by the SAME resolver: an absolute candidate is used
+# directly, and $PRECOND_EXTERNAL is joined ahead of the $PRECOND_DATA roots.
+# There is deliberately no second resolver. Two that can drift is how Frangieh
+# came to fail here after Norman had already been fixed.
+EXTERNAL_RELATIVE = {
+    "norman": NORMAN_RELATIVE,
+    "frangieh": ("frangieh/RNA_metadata.csv",
+                 "frangieh/RNA_expression.csv.gz"),
+}
+
 # Files whose absence makes this script meaningless. The simulator is asserted
 # even though this script does not import it: scripts 93 and 94 are a pair, and
 # a repo missing the simulator cannot produce the paper's numbers at all. If it
@@ -203,6 +216,25 @@ def resolve_candidate(cand, roots=None):
     return hit, tried
 
 
+def external_candidates(*names):
+    """$PRECOND_EXTERNAL joined with the name parts a loader asked for.
+
+    Loaders call resolve_data("frangieh", "RNA_metadata.csv"); this turns that
+    into $PRECOND_EXTERNAL/frangieh/RNA_metadata.csv without the loader knowing
+    the variable exists. The explicit EXTERNAL_RELATIVE lists cover trees whose
+    layout the name parts do not describe.
+    """
+    ext = external_root()
+    out = [("$PRECOND_EXTERNAL", ext.joinpath(*[str(n) for n in names]))]
+    tail = str(names[-1]) if names else ""
+    for rels in EXTERNAL_RELATIVE.values():
+        for rel in rels:
+            q = ext / rel
+            if Path(rel).name == tail and q not in [x for _, x in out]:
+                out.append(("$PRECOND_EXTERNAL", q))
+    return out
+
+
 def norman_candidate_paths():
     """The three A100 files, then the bare-filename fallback. Order is search
     order, and every entry is reported on failure whether absolute or not."""
@@ -271,16 +303,26 @@ def step0_gate(datasets):
                       flush=True)
             print(f"  [data] {'norman':<20} {'default run uses':<24} "
                   f"-> {found[0][1].resolve()}", flush=True)
+    # Frangieh: check the ACTUAL CSVs, not merely that some root is a directory.
+    # The old directory check passed on any machine with a data root and then
+    # let 41_screen_frangieh die inside the loader, which is where three
+    # completed conditions were lost.
     if any(d.startswith("frangieh") for d in datasets):
-        hit = next((r for _, r in roots if r.is_dir()), None)
-        if hit is None:
-            fatal.append("no data root on the candidate list is a directory; "
-                         "Frangieh cannot resolve.\n"
-                         + "".join(f"        tried {lbl:<14} {r}\n"
-                                   for lbl, r in roots).rstrip())
-        else:
-            print(f"  [data] frangieh_*          (SCP1064 CSVs)        "
-                  f"-> {hit.resolve()}", flush=True)
+        for rel in EXTERNAL_RELATIVE["frangieh"]:
+            parts = Path(rel).parts
+            cands = external_candidates(*parts) + [
+                (lbl, r.joinpath(*parts)) for lbl, r in roots]
+            hit = next((q for _, q in cands if q.exists()), None)
+            if hit is None:
+                fatal.append(
+                    f"Frangieh input not found: {rel}\n"
+                    + "".join(f"        tried {lbl:<18} {q}\n"
+                              for lbl, q in cands).rstrip()
+                    + "\n        Set $PRECOND_EXTERNAL (currently "
+                      f"{external_root()}) or $PRECOND_DATA.")
+            else:
+                print(f"  [data] {'frangieh_*':<20} {Path(rel).name:<24} "
+                      f"-> {hit.resolve()}", flush=True)
 
     for p in REQUIRED_SCRIPTS:
         if not p.exists():
@@ -298,7 +340,59 @@ def step0_gate(datasets):
         for f in fatal:
             print(f"  - {f}", file=sys.stderr)
         sys.exit(2)
+
+    report = resolution_report(datasets)
+    print(f"\n  {'condition':<22}{'branch':<26}{'resolved via':<20}path")
+    print("  " + "-" * 96)
+    for r in report:
+        print(f"  {r['dataset']:<22}{r['branch']:<26}{str(r['root_label']):<20}"
+              f"{r['path'] or '-'}")
+    print("  " + "-" * 96)
     print("  [gate] PASS\n", flush=True)
+    return report
+
+
+def resolution_report(datasets):
+    """Which branch of the ONE resolver each condition takes, and where it lands.
+
+    Three branches exist and no condition invents a fourth:
+      absolute            an absolute candidate, used directly
+      external-relative   joined under $PRECOND_EXTERNAL
+      data-root-relative  joined against the $PRECOND_DATA root list
+    """
+    roots = data_roots()
+    out = []
+    for ds in datasets:
+        base = ds.split("_")[0]
+        if base == "frangieh":
+            rels = EXTERNAL_RELATIVE["frangieh"]
+        elif base == "norman":
+            rels = None
+        else:
+            rels = INPUTS.get(ds, ())
+        if base == "norman":
+            cands = norman_candidate_paths()
+            hit = next(((lbl, q) for lbl, q in cands if q.exists()),
+                       (None, None))
+            branch = ("external-relative" if hit[0] == "$PRECOND_EXTERNAL"
+                      else ("data-root-relative" if hit[0] else "UNRESOLVED"))
+            out.append(dict(dataset=ds, branch=branch, root_label=hit[0],
+                            path=(str(hit[1].resolve()) if hit[1] else None),
+                            n_candidates=len(cands)))
+            continue
+        for rel in rels:
+            parts = Path(rel).parts
+            cands = external_candidates(*parts) + [
+                (lbl, r.joinpath(*parts)) for lbl, r in roots]
+            hit = next(((lbl, q) for lbl, q in cands if q.exists()),
+                       (None, None))
+            branch = ("external-relative" if hit[0] == "$PRECOND_EXTERNAL"
+                      else ("data-root-relative" if hit[0] else "UNRESOLVED"))
+            out.append(dict(dataset=ds, input=rel, branch=branch,
+                            root_label=hit[0],
+                            path=(str(hit[1].resolve()) if hit[1] else None),
+                            n_candidates=len(cands)))
+    return out
 
 
 # ============================================================ expected values
@@ -351,8 +445,31 @@ def _wrap_resolvers(mod, seen, restore):
         if real is None or getattr(real, "_audit_wrapped", False):
             continue
 
-        def wrapper(*a, _real=real, **kw):
-            got = _real(*a, **kw)
+        generic = fname in ("resolve_data", "_resolve")
+
+        def wrapper(*a, _real=real, _generic=generic, _fn=fname, **kw):
+            # $PRECOND_EXTERNAL FIRST, for the resolvers that take name parts.
+            # The named wrappers (norman_h5ad, frangieh_*_csv) delegate to these,
+            # so covering the generic pair covers every loader.
+            ext_tried = []
+            if _generic and a and not kw.get("arg"):
+                for lbl, q in external_candidates(*a):
+                    ext_tried.append((lbl, q))
+                    if q.exists():
+                        seen.append(str(q.resolve()))
+                        return q
+            try:
+                got = _real(*a, **kw)
+            except SystemExit as e:
+                if not ext_tried:
+                    raise
+                raise SystemExit(
+                    str(e).rstrip()
+                    + "\n  Also tried, before the roots above:\n  "
+                    + "\n  ".join(f"{lbl}: {q}" for lbl, q in ext_tried)
+                    + f"\n  Set $PRECOND_EXTERNAL (currently "
+                      f"{external_root()}) if the data lives outside "
+                      f"$PRECOND_DATA.")
             try:
                 seen.append(str(Path(got).resolve()))
             except TypeError:
