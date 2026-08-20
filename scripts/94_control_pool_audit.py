@@ -79,12 +79,19 @@ GATE_TOL = 1e-10
 #   arrays (sha prefix 55ef3d07db20, max 8.1284); Norman2019_prep_new.h5ad
 #   differs (5f33ad755e66, max 7.7348). None holds integral values, so the file
 #   named "raw" is already log-transformed.
-NORMAN_CANDIDATES = (
-    "/workspace/external/discrepancy_vae/datasets/Norman2019_raw.h5ad",
-    "/workspace/external/discrepancy_vae/datasets/datasets/Norman2019.h5ad",
-    "/workspace/external/discrepancy_vae/datasets/datasets/Norman2019_prep_new.h5ad",
+# The doubled datasets/datasets/ on the second and third is the real tree on
+# the A100, not a typo. These are RELATIVE to $PRECOND_EXTERNAL so no absolute
+# path is hardcoded; the only literal is that variable's default, below.
+NORMAN_RELATIVE = (
+    "discrepancy_vae/datasets/Norman2019_raw.h5ad",
+    "discrepancy_vae/datasets/datasets/Norman2019.h5ad",
+    "discrepancy_vae/datasets/datasets/Norman2019_prep_new.h5ad",
 )
+# Norman also stays resolvable as a bare filename against the $PRECOND_DATA
+# roots, so a machine that keeps it alongside the other inputs still works.
+NORMAN_FILENAME = "Norman2019_raw.h5ad"
 NORMAN_CANDIDATE_CAP = 2000     # the cap the published Norman number is quoted at
+DEFAULT_EXTERNAL = "/workspace/external"   # $PRECOND_EXTERNAL default
 
 # Files whose absence makes this script meaningless. The simulator is asserted
 # even though this script does not import it: scripts 93 and 94 are a pair, and
@@ -96,10 +103,13 @@ REQUIRED_SCRIPTS = (SIMULATOR,
                     HERE / "80_ranktest_core.py",
                     HERE / "84_results_io.py")
 
+# Bare filenames, joined against the $PRECOND_DATA root list. Norman is NOT
+# here: its files live outside those roots and are handled by
+# norman_candidate_paths(), which searches absolute candidates first.
 INPUTS = {
     "k562": ("dataset_k562.npz",),
     "rpe1": ("dataset_rpe1.npz",),
-    "norman": ("Norman2019_raw.h5ad",),
+    "norman": (),
     "frangieh_coculture": (), "frangieh_control": (), "frangieh_ifng": (),
 }
 
@@ -166,6 +176,50 @@ def data_roots():
     return roots
 
 
+def external_root():
+    """Where third-party checkouts live. $PRECOND_EXTERNAL, else the default."""
+    return Path(os.environ.get("PRECOND_EXTERNAL") or DEFAULT_EXTERNAL)
+
+
+def resolve_candidate(cand, roots=None):
+    """One candidate -> (hit or None, [every path tried, in order]).
+
+    THE FIX. An ABSOLUTE candidate is used directly; it names a file, not a
+    filename to look for. Joining it against a search-directory list is what
+    broke Norman: its files sit under $PRECOND_EXTERNAL, that directory is not
+    on the $PRECOND_DATA root list, and so the only directory that could ever
+    have held them was never searched.
+
+    A RELATIVE candidate keeps the original behaviour and is joined against
+    each root in order. The other five conditions rely on that and are
+    unchanged.
+    """
+    roots = data_roots() if roots is None else roots
+    c = Path(cand)
+    if c.is_absolute():
+        return (c if c.exists() else None), [("absolute", c)]
+    tried = [(lbl, r / c) for lbl, r in roots]
+    hit = next((q for _, q in tried if q.exists()), None)
+    return hit, tried
+
+
+def norman_candidate_paths():
+    """The three A100 files, then the bare-filename fallback. Order is search
+    order, and every entry is reported on failure whether absolute or not."""
+    ext = external_root()
+    out = [("$PRECOND_EXTERNAL", ext / rel) for rel in NORMAN_RELATIVE]
+    out += [(lbl, r / NORMAN_FILENAME) for lbl, r in data_roots()]
+    return out
+
+
+def first_existing_norman():
+    """The path a default Norman run should use, or None. Never guesses."""
+    for _, p in norman_candidate_paths():
+        if p.exists():
+            return p
+    return None
+
+
 # ===================================================================== step 0
 def step0_gate(datasets):
     """Everything that must be true before any measurement. Fails loudly."""
@@ -183,18 +237,40 @@ def step0_gate(datasets):
             fatal.append(f"$PRECOND_DATA is set but is not a directory: {root}")
 
     roots = data_roots()
+    print(f"  [env]  PRECOND_EXTERNAL = {external_root()}"
+          f"{'' if os.environ.get('PRECOND_EXTERNAL') else '   (default)'}",
+          flush=True)
     for ds in datasets:
         for rel in INPUTS.get(ds, ()):
-            tried = [r / rel for _, r in roots]
-            hit = next((p for p in tried if p.exists()), None)
+            hit, tried = resolve_candidate(rel, roots)
             if hit is None:
                 fatal.append(
                     f"input for {ds} not found: {rel}\n"
-                    + "".join(f"        tried {lbl:<14} {r / rel}\n"
-                              for lbl, r in roots).rstrip())
+                    + "".join(f"        tried {lbl:<18} {q}\n"
+                              for lbl, q in tried).rstrip())
             else:
                 print(f"  [data] {ds:<20} {rel:<24} -> {hit.resolve()}",
                       flush=True)
+
+    # Norman searches absolute candidates first, then the bare filename. At
+    # least one must exist; --norman-candidates needs all three and asserts
+    # that separately.
+    if "norman" in datasets:
+        cands = norman_candidate_paths()
+        found = [(lbl, q) for lbl, q in cands if q.exists()]
+        if not found:
+            fatal.append(
+                "no Norman input found. Tried, in order:\n"
+                + "".join(f"        tried {lbl:<18} {q}\n"
+                          for lbl, q in cands).rstrip()
+                + "\n        Set $PRECOND_EXTERNAL (currently "
+                  f"{external_root()}) or $PRECOND_DATA.")
+        else:
+            for lbl, q in found:
+                print(f"  [data] {'norman':<20} {lbl:<24} -> {q.resolve()}",
+                      flush=True)
+            print(f"  [data] {'norman':<20} {'default run uses':<24} "
+                  f"-> {found[0][1].resolve()}", flush=True)
     if any(d.startswith("frangieh") for d in datasets):
         hit = next((r for _, r in roots if r.is_dir()), None)
         if hit is None:
@@ -334,6 +410,11 @@ def control_matrix(DESC, dataset, args, norman_path=None):
         return mod
 
     base = dataset.split("_")[0]
+    if base == "norman" and norman_path is None:
+        # 40_screen_norman resolves a bare filename against the $PRECOND_DATA
+        # roots only, so it cannot see $PRECOND_EXTERNAL. Hand it the resolved
+        # path rather than let it fail in a place this script cannot report.
+        norman_path = first_existing_norman()
     _wrap_resolvers(getattr(DESC, "SCREEN", None), paths, restore)
     DESC.latent_dim_block = capture_ld
     DESC.profile_perturb = capture_pp
@@ -436,7 +517,8 @@ def norman_candidates(DESC, args):
     print("=" * 70, flush=True)
 
     out = []
-    for cand in NORMAN_CANDIDATES:
+    for _lbl, cand in [(l, q) for l, q in norman_candidate_paths()
+                       if l == "$PRECOND_EXTERNAL"]:
         p = Path(cand)
         print(f"\n--- [{p.name}] ---\n    {p}", flush=True)
         if not p.exists():
@@ -545,9 +627,9 @@ def main():
             print(f"\n[write] {path}", flush=True)
             n_ok = sum(1 for c in block["candidates"]
                        if c.get("status") == "ok")
-            if n_ok != len(NORMAN_CANDIDATES):
+            if n_ok != len(NORMAN_RELATIVE):
                 print(f"\n[fatal] SHORTFALL: {n_ok} candidate(s) measured for "
-                      f"{len(NORMAN_CANDIDATES)} requested. This run is "
+                      f"{len(NORMAN_RELATIVE)} requested. This run is "
                       f"INCOMPLETE.", file=sys.stderr)
                 sys.exit(1)
             return
@@ -637,7 +719,10 @@ def main():
                 "Three Norman files exist on the A100 and which produced the "
                 "published number is not recorded. Run "
                 "--norman-candidates to measure all three."),
-            norman_candidate_paths=list(NORMAN_CANDIDATES),
+            norman_candidate_paths=[str(q) for l, q in
+                                    norman_candidate_paths()
+                                    if l == "$PRECOND_EXTERNAL"],
+            external_root=str(external_root()),
             contains_no_test=True,
             disclaimer=("DESCRIPTIVE ONLY. No rank test was run and no "
                         "assumption verdict is expressed or implied."),
