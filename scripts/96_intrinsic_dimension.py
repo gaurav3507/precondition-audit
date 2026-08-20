@@ -24,12 +24,19 @@ claim checkable is:
     is the finding. It is recorded as `estimators_disagree` and stated in the
     summary rather than resolved by picking one.
 
-STEP-0 SYNTHETIC GATE RUNS FIRST, ALWAYS. Three cases with known answers at the
-shape of the real matrices. There is no flag that skips it: main() calls it
+STEP-0 SYNTHETIC GATE RUNS FIRST, ALWAYS. Five cases with known answers at the
+shape of the real matrices; three are gated and two are calibration only. There is no flag that skips it: main() calls it
 before the loaders are even imported, and a failure exits non-zero. Case 2 is
 the whole point of the exercise. If the estimator returns the inflated
 covariance rank on a nonlinear embedding of 10 latents, it cannot answer the
 question this script exists to answer and the run stops there.
+
+Cases 4 and 5 are calibration and are deliberately NOT gated on recovery. Case 3
+showed the estimator's empirical ceiling at this (n, p) sits below the top of the
+range the real participation ratios occupy, which means a real value near that
+ceiling may be censored rather than measured. Cases 4 and 5 put known linear
+dimensions inside that range and record how far short the estimate falls, so the
+real numbers can be read against a measured bias instead of an assumed one.
 
 NO VERDICT ON THE DATA. This reports dimension estimates. It runs no rank test,
 expresses no assumption verdict, and Phase B remains not authorised.
@@ -110,6 +117,15 @@ SYN_POLY_FAIL_AT = 0.5
 # from the structured cases by a wide margin, and that whatever it returns is
 # RECORDED as this estimator's empirical ceiling at this (n, p).
 SYN_CEILING_MULTIPLE = 3.0
+# Cases 4 and 5 are CALIBRATION, not gates. Case 3 returned an empirical ceiling
+# well below the top of the range the real participation ratios occupy, so a
+# real value near that ceiling may be censored rather than measured. These two
+# put known dimensions inside that range and measure where the censoring starts.
+# Their recovery is NOT asserted: the whole point is that recovery is expected to
+# fail, and by how much is the number being collected. Only "the estimator
+# returned something" is fatal, because a missing calibration point is a missing
+# calibration point.
+SYN_CALIBRATION_LATENTS = (200, 450)
 
 
 def _load(path, name):
@@ -349,23 +365,44 @@ def _syn_cases(rng):
 
     X3 = rng.standard_normal((SYN_N, SYN_P))
 
-    return [
+    cases = [
         dict(case="1_linear_gaussian", expected=float(SYN_LATENT), X=X1,
+             gated=True,
              description=(f"{SYN_LATENT} latents, random linear map into "
                           f"{SYN_P} columns")),
         dict(case="2_nonlinear_poly2", expected=float(SYN_LATENT), X=X2,
+             gated=True,
              description=(f"the same {SYN_LATENT} latents through a degree-2 "
                           f"polynomial feature map ({P.shape[1]} features) then "
                           f"a random linear embedding into {SYN_P} columns; the "
                           f"covariance rank is {P.shape[1]} and the manifold "
                           f"dimension is {SYN_LATENT}")),
         dict(case="3_isotropic_noise", expected=float(SYN_P), X=X3,
+             gated=True,
              description=(f"full-rank isotropic noise in {SYN_P} columns, no "
                           f"latent structure; no neighbourhood estimator can "
                           f"reach {SYN_P} at n={SYN_N}, so what is asserted is "
                           f"separation from cases 1 and 2 and what is recorded "
                           f"is this estimator's empirical ceiling")),
     ]
+
+    # ---- calibration cases, same construction as case 1 at larger latent
+    # dimension. Not gated on recovery; the ratio to truth IS the measurement.
+    for i, dl in enumerate(SYN_CALIBRATION_LATENTS, start=4):
+        Zc = rng.standard_normal((SYN_N, dl))
+        Ac = rng.standard_normal((dl, SYN_P))
+        Xc = Zc @ Ac + SYN_NOISE_SD * rng.standard_normal((SYN_N, SYN_P))
+        cases.append(dict(
+            case=f"{i}_linear_gaussian_d{dl}", expected=float(dl), X=Xc,
+            gated=False,
+            description=(f"{dl} latents, random linear map into {SYN_P} "
+                         f"columns, the same construction as case 1. CALIBRATION "
+                         f"ONLY: {dl} sits inside the range the real "
+                         f"participation ratios occupy, and n={SYN_N} points "
+                         f"cannot fill a {dl}-dimensional manifold, so recovery "
+                         f"is not expected and is not asserted. The ratio to "
+                         f"truth is what this case exists to record.")))
+    return cases
 
 
 def step0_synthetic_gate():
@@ -381,7 +418,9 @@ def step0_synthetic_gate():
     results, fatal = [], []
 
     for c in cases:
-        print(f"\n--- [{c['case']}] expected ~ {c['expected']:g} ---", flush=True)
+        tag = "GATED" if c.get("gated") else "CALIBRATION ONLY, not gated"
+        print(f"\n--- [{c['case']}] expected ~ {c['expected']:g}  ({tag}) ---",
+              flush=True)
         print(f"    {c['description']}", flush=True)
         est = all_estimators(c["X"], rng=rng)
         pe = est["point_estimates"]
@@ -389,6 +428,7 @@ def step0_synthetic_gate():
             print(f"      {name:<24} {('None' if v is None else f'{v:.3f}')}",
                   flush=True)
         results.append(dict(case=c["case"], expected=c["expected"],
+                            gated=bool(c.get("gated")),
                             description=c["description"], estimators=est))
 
     by_case = {r["case"]: r for r in results}
@@ -400,6 +440,16 @@ def step0_synthetic_gate():
     d1, d2, d3 = (headline("1_linear_gaussian"),
                   headline("2_nonlinear_poly2"),
                   headline("3_isotropic_noise"))
+
+    for r in results:
+        if r.get("gated"):
+            continue
+        v = r["estimators"]["point_estimates"].get("twonn")
+        if v is None:
+            fatal.append(
+                f"{r['case']}: TwoNN returned no estimate. Recovery is not "
+                f"asserted for a calibration case, but a calibration point "
+                f"that does not exist cannot calibrate anything.")
 
     for case, d in (("1_linear_gaussian", d1), ("2_nonlinear_poly2", d2)):
         if d is None:
@@ -428,46 +478,70 @@ def step0_synthetic_gate():
             f"estimator does not separate full-rank noise from a "
             f"{SYN_LATENT}-dimensional manifold at this (n, p).")
 
-    print("\n" + "=" * 78)
-    print(f" {'case':<24}{'expected':>10}{'TwoNN':>10}  verdict")
-    print("-" * 78)
-    for case, d, exp in (("1_linear_gaussian", d1, SYN_LATENT),
-                         ("2_nonlinear_poly2", d2, SYN_LATENT),
-                         ("3_isotropic_noise", d3, SYN_P)):
+    print("\n" + "=" * 86)
+    print(f" {'case':<28}{'expected':>10}{'TwoNN':>10}{'ratio':>9}"
+          f"{'role':>16}  verdict")
+    print("-" * 86)
+    for r in results:
+        case = r["case"]
+        d = r["estimators"]["point_estimates"].get("twonn")
+        exp = r["expected"]
         bad = [f for f in fatal if f.startswith(case)]
-        print(f" {case:<24}{exp:>10}"
-              f"{('None' if d is None else f'{d:.2f}'):>10}  "
+        ratio = None if (d is None or not exp) else d / exp
+        print(f" {case:<28}{exp:>10.0f}"
+              f"{('None' if d is None else f'{d:.2f}'):>10}"
+              f"{('-' if ratio is None else f'{ratio:.3f}'):>9}"
+              f"{('gate' if r['gated'] else 'calibration'):>16}  "
               f"{'FAIL' if bad else 'PASS'}")
-    print("-" * 78)
+    print("-" * 86)
     print(f" case 3 is recorded as the empirical ceiling at n={SYN_N}, "
           f"p={SYN_P}; it is not expected to reach {SYN_P}.")
-    print("=" * 78)
+    print(f" cases {', '.join(str(i) for i in range(4, 4 + len(SYN_CALIBRATION_LATENTS)))}"
+          f" are calibration: recovery is NOT asserted and the ratio column is "
+          f"the measurement.")
+    print("=" * 86)
 
     # Per-estimator calibration on the three known answers. This is what makes
     # the real-data table readable: an estimator that returns half the true
     # dimension on case 1 is expected to return half of it on real data too,
     # and a reader can see that here instead of guessing.
+    truth = {r["case"]: r["expected"] for r in results}
+    order = [r["case"] for r in results]
     calib = {}
     for r in results:
         for name, v in r["estimators"]["point_estimates"].items():
-            calib.setdefault(name, {})[r["case"]] = v
-    for name, byc in calib.items():
-        lin = byc.get("1_linear_gaussian")
-        byc["bias_vs_known_case1"] = (None if lin is None
-                                      else float(lin) / SYN_LATENT)
+            e = calib.setdefault(name, {"value": {}, "ratio_to_truth": {}})
+            e["value"][r["case"]] = v
+            t = truth[r["case"]]
+            e["ratio_to_truth"][r["case"]] = (None if v is None or not t
+                                              else float(v) / float(t))
+    for name, e in calib.items():
+        lin = e["value"].get("1_linear_gaussian")
+        e["bias_vs_known_case1"] = (None if lin is None
+                                    else float(lin) / SYN_LATENT)
 
-    print(f"\n {'estimator':<24}{'case1 (10)':>12}{'case2 (10)':>12}"
-          f"{'case3 (ceil)':>14}{'case1/known':>13}")
-    print("-" * 78)
+    def _f(x, w=8, dp=2):
+        return f"{'None':>{w}}" if x is None else f"{x:>{w}.{dp}f}"
+
+    hdr = f" {'estimator':<24}"
+    for c in order:
+        hdr += f"{c.split('_')[0] + ' (' + format(truth[c], '.0f') + ')':>16}"
+    print("\n CALIBRATION: value and value/truth for every estimator, "
+          "every case")
+    print(hdr)
+    print("-" * (25 + 16 * len(order)))
     for name in sorted(calib):
-        b = calib[name]
-        def f(x):
-            return "None" if x is None else f"{x:.2f}"
-        print(f" {name:<24}{f(b.get('1_linear_gaussian')):>12}"
-              f"{f(b.get('2_nonlinear_poly2')):>12}"
-              f"{f(b.get('3_isotropic_noise')):>14}"
-              f"{f(b.get('bias_vs_known_case1')):>13}")
-    print("-" * 78)
+        e = calib[name]
+        row = f" {name:<24}"
+        for c in order:
+            row += (_f(e["value"].get(c), 8, 2)
+                    + _f(e["ratio_to_truth"].get(c), 8, 3))
+        print(row)
+    print("-" * (25 + 16 * len(order)))
+    print(" each cell is  value  ratio-to-truth. Case 3's truth is the ambient "
+          "dimension, which")
+    print(" no neighbourhood estimator can reach from "
+          f"{SYN_N} points; read its ratio as a ceiling, not a bias.")
 
     gate = dict(shape=dict(n=SYN_N, p=SYN_P, latent=SYN_LATENT,
                            noise_sd=SYN_NOISE_SD),
@@ -477,6 +551,16 @@ def step0_synthetic_gate():
                 band=dict(relative_lo=SYN_REL_LO, relative_hi=SYN_REL_HI),
                 polynomial_covariance_rank=SYN_POLY_DIM,
                 empirical_ceiling=d3,
+                calibration_latents=list(SYN_CALIBRATION_LATENTS),
+                calibration_note=(
+                    f"Cases 4 and 5 put known linear dimensions "
+                    f"{list(SYN_CALIBRATION_LATENTS)} inside the range the real "
+                    f"participation ratios occupy. They are NOT gated on "
+                    f"recovery: {SYN_N} points cannot fill a manifold of those "
+                    f"dimensions, so under-recovery is expected and its size is "
+                    f"the measurement. Read a real-data estimate near case 3's "
+                    f"empirical ceiling as possibly censored rather than "
+                    f"measured."),
                 failures=fatal,
                 passed=not fatal)
     if fatal:
