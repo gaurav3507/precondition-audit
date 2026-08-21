@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software or its artefacts, please cite it as below."
 type: software
-title: "A Precondition Audit of Benchmark Datasets for Multi-Environment Causal Representation Learning"
+title: "Benchmark Datasets for Multi-Environment Causal Representation Learning Do Not Meet Their Identifiability Preconditions"
 abstract: >-
   Code and committed artefacts for a precondition audit of the datasets used to
   benchmark multi-environment causal representation learning: whether real
@@ -20,7 +20,7 @@ license: MIT
 repository-code: "https://github.com/gaurav3507/precondition-audit"
 preferred-citation:
   type: article
-  title: "A Precondition Audit of Benchmark Datasets for Multi-Environment Causal Representation Learning"
+  title: "Benchmark Datasets for Multi-Environment Causal Representation Learning Do Not Meet Their Identifiability Preconditions"
   authors:
     - family-names: Goyal
       given-names: Gaurav
