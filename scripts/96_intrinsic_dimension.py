@@ -41,7 +41,7 @@ real numbers can be read against a measured bias instead of an assumed one.
 NO VERDICT ON THE DATA. This reports dimension estimates. It runs no rank test,
 expresses no assumption verdict, and Phase B remains not authorised.
 
-Usage (A100, cb venv). Long run; Claude Code cannot execute it:
+Usage (A100). Long-running batch job; launch detached.
 
     nohup python -u scripts/96_intrinsic_dimension.py \
         > logs/intrinsic_dimension.log 2>&1 &

@@ -29,7 +29,7 @@ own loader, captured rather than re-derived, and the estimators are 85's own
 NO VERDICT. This reports availability, matching and provenance. It expresses no
 assumption verdict and Phase B remains not authorised.
 
-Usage (A100, cb venv). Long run; Claude Code cannot execute it:
+Usage (A100). Long-running batch job; launch detached.
 
     nohup python -u scripts/94_control_pool_audit.py \
         > logs/control_pool_audit.log 2>&1 &

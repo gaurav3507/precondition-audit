@@ -32,7 +32,7 @@ COMPARISON IS REPORTED, NOT GATED. Ten seeds per point means one or two tenths
 of movement is sampling noise. Every differing (n_e, scaling) is listed with
 both values; nothing exits non-zero on a difference.
 
-Usage (A100, cb venv). This is a long run and Claude Code cannot execute it:
+Usage (A100). Long-running batch job; launch detached.
 
     nohup python -u scripts/93_regen_power_curves.py --arm soft \
         > logs/regen_soft.log 2>&1 &

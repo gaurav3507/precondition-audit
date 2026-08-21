@@ -6,12 +6,22 @@ which is not redistributable and is never committed.
 
 ## Environment
 
+Two environments, pinned separately because they differ and the difference
+matters. Every quantity in the dimension tables comes from an SVD, and SVD
+results depend on the BLAS backend at the last digits.
+
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install numpy scipy matplotlib
+# rebuilding tables, figures and the index from committed artefacts
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-mac.txt      # numpy 2.4.6, scipy 1.17.1, Accelerate
+
+# running the loaders against raw data
+python3.10 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-a100.txt     # numpy 2.2.6, scipy 1.15.3, scipy-openblas
 ```
 
-`pandas`, `scanpy` and `anndata` are needed only for the A100 loaders.
+`pandas`, `scanpy` and `anndata` are needed only for the A100 loaders and are
+pinned in `requirements-a100.txt` only.
 
 ## The two constants that must reproduce
 

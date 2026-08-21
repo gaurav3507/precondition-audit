@@ -63,7 +63,7 @@ for m in ("numpy", "scipy", "matplotlib", "pandas"):
         missing.append(m)
 if missing:
     sys.stderr.write("[fatal] missing packages: %s\n" % ", ".join(missing))
-    sys.stderr.write("        pip install -r requirements.txt\n")
+    sys.stderr.write("        pip install -r requirements-mac.txt   (or requirements-a100.txt)\n")
     sys.exit(1)
 EOF
 

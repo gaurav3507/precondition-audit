@@ -18,6 +18,19 @@ authors:
     given-names: Manju
 license: MIT
 repository-code: "https://github.com/gaurav3507/precondition-audit"
+preferred-citation:
+  type: article
+  title: "A Precondition Audit of Benchmark Datasets for Multi-Environment Causal Representation Learning"
+  authors:
+    - family-names: Goyal
+      given-names: Gaurav
+    - family-names: Tiwari
+      given-names: Shailendra
+    - family-names: Khurana
+      given-names: Manju
+  journal: "IEEE Journal of Biomedical and Health Informatics"
+  year: 2026
+  notes: "Under review. Cite the article for the findings; cite this software entry for the code and artefacts."
 keywords:
   - causal representation learning
   - identifiability
