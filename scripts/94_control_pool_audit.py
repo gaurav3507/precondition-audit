@@ -412,14 +412,25 @@ def expected_pr(dataset, cap):
                 continue
             if (doc.get("meta") or {}).get("status") != "CURRENT":
                 continue
-            label = doc.get("dataset")
+            # The arm can live in three places and Frangieh uses the third.
+            # doc["dataset"] is bare "frangieh" for all three arms, doc["arm"]
+            # and meta.config.arm are null, and the only record of which arm
+            # this is sits in blocks[i]["label"] as "frangieh:coculture". Keying
+            # on the first two alone silently returned None for every Frangieh
+            # row, which is how three raw-arm participation ratios went missing
+            # from the intrinsic-dimension comparison.
+            base = doc.get("dataset")
             arm = doc.get("arm") or (doc.get("meta") or {}
                                      ).get("config", {}).get("arm")
-            if arm and not str(label).endswith(str(arm)):
-                label = f"{label}_{arm}"
-            if label != dataset:
-                continue
             for blk in doc.get("blocks") or []:
+                label = base
+                if arm and not str(label).endswith(str(arm)):
+                    label = f"{base}_{arm}"
+                blk_label = blk.get("label")
+                if blk_label:
+                    label = str(blk_label).replace(":", "_")
+                if label != dataset:
+                    continue
                 ld = blk.get("latent_dimension_from_controls") or {}
                 rec = ld.get(str(want))
                 if rec and rec.get("participation_ratio") is not None:
