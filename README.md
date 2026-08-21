@@ -59,6 +59,7 @@ tried.
 | `scripts/` | Analysis code. Loaders and profilers (`03`, `40`, `41`, `85`), the rank-test core and simulator (`80`, `81`, `83`), the artefact schema gate (`84`), table, figure and index builders (`87`–`92`), and the A100 audit and regeneration jobs (`93`, `94`, `96`). |
 | `results/descriptives/` | Per-dataset profiles for all eight datasets: environment attrition, cells per environment, and the control-covariance dimension estimates. Each carries a compressed `__spectra.npz` sidecar holding the eigenvalue arrays. |
 | `results/preprocessing/` | The four-arm preprocessing sweep at a matched sample of 2000 control cells, with its own eigenvalue sidecars. |
+| `results/intrinsic/` | Nonlinear intrinsic-dimension estimates, one artefact per condition, each carrying the synthetic calibration the estimates are read against. |
 | `results/gates/` | Simulator and oracle gate artefacts, organised `<statistic>/<gate>/<timestamp>.json`. Four statistics are present, of which `lfc` is the final one; `diy_retired`, `cfa_kappa` and `cft` are kept so the record of what was tried and discarded is complete. |
 | `results/INDEX.md` | Generated index of every artefact, with status and provenance. Regenerate with `python scripts/89_make_index.py`; do not hand-edit. |
 | `paper/tables/` | Generated tables in Markdown and CSV. |
