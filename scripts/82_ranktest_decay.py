@@ -1,11 +1,19 @@
 """Synthetic s* vs d sweep: where does the ranktest start detecting nonlinearity?
 
-WHAT THIS MEASURES. Under linear mixing the composite null H0: rank <= 2 holds
-and the LFC test controls its level. Under nonlinear mixing at scale s the
-mixing itself manufactures apparent rank structure, so the rejection rate climbs
-with s. The detection threshold s* is the smallest s at which the rate crosses
-out of level control. This sweep locates s* as a function of the latent
-dimension d and reports how s* moves with d.
+WHAT THIS MEASURES. The detection threshold s* is the smallest s at which the
+rejection rate crosses out of level control, reported as a function of the
+latent dimension d.
+
+TWO REGIMES, DEFAULT LINEAR (--mixing). The headline runs under LINEAR mixing,
+the regime where the LFC test holds its level (gate0, gate1). There s does NOT
+enter the mixing: it is a grid label only, and the artefact records
+s_enters_mixing = false, so the flat curve reads as validity rather than a
+swept threshold. Under NONLINEAR mixing (--mixing nonlinear) s is gate2's
+leaky-ReLU nonlinearity scale and the mixing manufactures apparent rank
+structure, but that is the blocked Phase-B regime where rejection is confounded
+with mixing curvature, so an s* measured there is contaminated. Both regimes
+are kept; the mixing is recorded top-level in every artefact so no reader can
+mistake one for the other.
 
 NOTHING IS REIMPLEMENTED. The statistic, the projection and the standardiser are
 imported from 80_ranktest_core.py; the simulator and the step-0 oracle gate are
@@ -40,7 +48,9 @@ Usage (A100). Long-running batch job; launch detached:
 
     nohup python -u scripts/82_ranktest_decay.py > logs/decay.log 2>&1 &
 
-    python scripts/82_ranktest_decay.py --smoke     # one d=80 cell, time it, gate
+    python scripts/82_ranktest_decay.py --smoke                  # linear (default)
+    python scripts/82_ranktest_decay.py --smoke --mixing linear
+    python scripts/82_ranktest_decay.py --mixing nonlinear       # Phase-B regime
 
 No em dashes anywhere in this file, by lane style rule.
 """
@@ -72,6 +82,7 @@ S_GRID = (0.005, 0.01, 0.02, 0.05, 0.1)
 N_E = 2000                      # per environment, mirrors gate2's n
 DRAWS_PER_CELL = 400
 SCALINGS = ("raw", "standardise")   # the two the lane uses; standardise is 80's
+MIXINGS = ("linear", "nonlinear")   # default linear: the valid regime
 D_OBS = 200                     # observed dimension D, mirrors gate2
 
 # Recorded so the artefact names the rules it used rather than implying them.
@@ -117,12 +128,26 @@ def crossing_level(n_draws):
 
 
 # =============================================================== one draw
-def one_draw(d_latent, D, n, s, scaling, main_seed, iv_seed):
-    """One synthetic realisation, mirroring gate2's per-draw construction exactly.
+def one_draw(d_latent, D, n, s, scaling, mixing, main_seed, iv_seed):
+    """One synthetic realisation, decided by 80's reject_rank2_cf.
 
-    Nonlinear leaky-ReLU mixing at scale s, a hard k=1 intervention environment,
-    decided by 80's reject_rank2_cf. The two generators mirror gate2's split of
-    the mixing stream from the intervention stream.
+    mixing="linear"    : the proper full-rank Gaussian linear map gate0 and
+                         gate1 use, X = mix_linear(Z, A) with
+                         A = standard_normal((D, d_latent)), one A reused for
+                         the control and the environment. This is the regime
+                         where the test holds its level. s does NOT enter the
+                         mixing here; it is carried only as a grid label, and
+                         the artefact records s_enters_mixing = false so the
+                         flat curve is never mistaken for a swept one.
+    mixing="nonlinear" : gate2's 2-layer leaky-ReLU mix_mlp at scale s, the
+                         blocked Phase-B regime, unchanged. s IS the
+                         nonlinearity scale.
+
+    The two generators mirror gate2's split of the mixing stream from the
+    intervention stream. Nothing here is a new statistic or a new simulator:
+    make_scm, sample_latent, mix_linear, mix_mlp, add_obs_noise and split_pools
+    are 81's; standardise, fit_pca, project, null_band_from_pool and
+    rank_diagnostic are 80's.
     """
     d = min(10, d_latent)                  # projection dimension, as in gate2
     n_total = 10 * n
@@ -130,12 +155,26 @@ def one_draw(d_latent, D, n, s, scaling, main_seed, iv_seed):
 
     rng = np.random.default_rng(main_seed)
     B, nv, _ = ORACLE.make_scm(d_latent, rng)
-    H = 4 * d_latent
-    A1 = rng.standard_normal((H, d_latent)) / np.sqrt(d_latent)
-    A2 = rng.standard_normal((D, H)) / np.sqrt(H)
+
+    if mixing == "linear":
+        # gate0/gate1's proper linear map. Full-rank Gaussian, not degenerate,
+        # one A shared by control and environment. s is not consumed.
+        A = rng.standard_normal((D, d_latent))
+
+        def mix(Z):
+            return ORACLE.mix_linear(Z, A)
+    elif mixing == "nonlinear":
+        H = 4 * d_latent
+        A1 = rng.standard_normal((H, d_latent)) / np.sqrt(d_latent)
+        A2 = rng.standard_normal((D, H)) / np.sqrt(H)
+
+        def mix(Z):
+            return ORACLE.mix_mlp(Z, A1, A2, s)
+    else:
+        raise ValueError(f"unknown mixing {mixing!r}; use linear or nonlinear")
 
     Zc = ORACLE.sample_latent(B, nv, n_total, rng)
-    Xc = ORACLE.mix_mlp(Zc, A1, A2, s)
+    Xc = mix(Zc)
     sd = 0.1 * float(np.mean(Xc.std(0)))
     Xc = ORACLE.add_obs_noise(Xc, sd, rng)
     Xc_raw = Xc
@@ -151,7 +190,7 @@ def one_draw(d_latent, D, n, s, scaling, main_seed, iv_seed):
     nodes = rng_iv.choice(d_latent, size=1, replace=False)
     Ze = ORACLE.sample_latent(B, nv, n, rng, kind="hard", nodes=nodes,
                               rng_iv=rng_iv)
-    Xe = ORACLE.add_obs_noise(ORACLE.mix_mlp(Ze, A1, A2, s), sd, rng)
+    Xe = ORACLE.add_obs_noise(mix(Ze), sd, rng)
     if scaling == "standardise":
         Xe = CORE.standardise(Xe, Xc_raw[basis_i])
 
@@ -161,19 +200,22 @@ def one_draw(d_latent, D, n, s, scaling, main_seed, iv_seed):
     return bool(r["reject_rank2_cf"])
 
 
-def cell_seeds(scaling_idx, d_idx, s_idx, draw):
-    """Distinct reproducible seeds per (cell, draw). No draw is special-cased."""
-    off = scaling_idx * 300_000 + d_idx * 50_000 + s_idx * 8_000 + draw
-    return 1_000_000 + off, 5_000_000 + off
+def cell_seeds(mixing_idx, scaling_idx, d_idx, s_idx, draw):
+    """Distinct reproducible seeds per (mixing, cell, draw). No draw special-cased."""
+    off = (mixing_idx * 2_000_000 + scaling_idx * 300_000
+           + d_idx * 50_000 + s_idx * 8_000 + draw)
+    return 1_000_000 + off, 20_000_000 + off
 
 
-def run_cell(scaling, scaling_idx, d_idx, d_latent, s_idx, s, n_draws):
+def run_cell(mixing, mixing_idx, scaling, scaling_idx, d_idx, d_latent,
+             s_idx, s, n_draws):
     rejects = []
     for draw in range(n_draws):
-        ms, ivs = cell_seeds(scaling_idx, d_idx, s_idx, draw)
-        rejects.append(one_draw(d_latent, D_OBS, N_E, s, scaling, ms, ivs))
+        ms, ivs = cell_seeds(mixing_idx, scaling_idx, d_idx, s_idx, draw)
+        rejects.append(one_draw(d_latent, D_OBS, N_E, s, scaling, mixing, ms, ivs))
     rate = float(np.mean(rejects)) if rejects else None
-    return dict(d_latent=int(d_latent), d_projection=int(min(10, d_latent)),
+    return dict(mixing=mixing, d_latent=int(d_latent),
+                d_projection=int(min(10, d_latent)),
                 s=float(s), scaling=scaling, n_draws=int(n_draws),
                 reject_rate=rate,
                 n_reject=int(np.sum(rejects)))
@@ -282,8 +324,10 @@ def provenance(gate_cfg):
     )
 
 
-def full_config():
-    return dict(d_latent_grid=list(D_LATENT_GRID), s_grid=list(S_GRID),
+def full_config(mixing):
+    return dict(mixing=mixing,
+               s_enters_mixing=bool(mixing == "nonlinear"),
+               d_latent_grid=list(D_LATENT_GRID), s_grid=list(S_GRID),
                n_e=N_E, draws_per_cell=DRAWS_PER_CELL, D=D_OBS,
                scalings=list(SCALINGS), alpha=ORACLE.ALPHA,
                B_null=ORACLE.B_NULL,
@@ -293,7 +337,7 @@ def full_config():
                                          "81.gate0's over-rejection boundary"))
 
 
-def write_scaling(scaling, cells, gate_cfg, outdir):
+def write_scaling(scaling, cells, gate_cfg, outdir, mixing):
     level = crossing_level(DRAWS_PER_CELL)
     brackets_by_d = {}
     for d in D_LATENT_GRID:
@@ -301,8 +345,9 @@ def write_scaling(scaling, cells, gate_cfg, outdir):
         if len(rows) == len(S_GRID):
             brackets_by_d[d] = bracket_s_star(rows, level)
     payload = dict(
+        mixing=mixing,
         scaling=scaling,
-        config=full_config(),
+        config=full_config(mixing),
         s_star_crossing_level=level,
         cells=cells,
         s_star_bracket_per_d={str(d): b for d, b in brackets_by_d.items()},
@@ -314,15 +359,15 @@ def write_scaling(scaling, cells, gate_cfg, outdir):
         disclaimer=("SYNTHETIC ONLY. No real dataset was touched and no "
                     "assumption verdict is expressed or implied."),
     )
-    path = outdir / f"{utc_stamp()}__decay_{scaling}.json"
+    path = outdir / f"{utc_stamp()}__decay_{mixing}_{scaling}.json"
     path.write_text(json.dumps(payload, indent=2) + "\n")
     return path, len(cells)
 
 
 # =============================================================== smoke
-def run_smoke(outdir):
+def run_smoke(outdir, mixing, mixing_idx):
     print("=" * 70, flush=True)
-    print(" SMOKE: one d=80 cell, s=0.01, both scalings, "
+    print(f" SMOKE ({mixing} mixing): one d=80 cell, s=0.01, both scalings, "
           f"{DRAWS_PER_CELL} draws, plus the step-0 gate", flush=True)
     print("=" * 70, flush=True)
 
@@ -341,8 +386,8 @@ def run_smoke(outdir):
     cells, timings = [], {}
     for scaling_idx, scaling in enumerate(SCALINGS):
         t0 = time.time()
-        cell = run_cell(scaling, scaling_idx, d_idx, d_latent, s_idx, s,
-                        DRAWS_PER_CELL)
+        cell = run_cell(mixing, mixing_idx, scaling, scaling_idx, d_idx,
+                        d_latent, s_idx, s, DRAWS_PER_CELL)
         secs = time.time() - t0
         timings[scaling] = secs
         cells.append(cell)
@@ -357,7 +402,9 @@ def run_smoke(outdir):
     outdir.mkdir(parents=True, exist_ok=True)
     payload = dict(
         mode="smoke",
-        cell=dict(d_latent=80, s=0.01, draws_per_cell=DRAWS_PER_CELL),
+        mixing=mixing,
+        cell=dict(d_latent=80, s=0.01, draws_per_cell=DRAWS_PER_CELL,
+                  mixing=mixing),
         cells=cells,
         d80_cell_seconds=d80,
         d80_cell_seconds_by_scaling={k: float(v) for k, v in timings.items()},
@@ -378,12 +425,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", action="store_true",
                     help="one d=80 s=0.01 cell both scalings, gate, timing")
+    ap.add_argument("--mixing", choices=MIXINGS, default="linear",
+                    help="linear (default, the valid regime) or nonlinear")
     ap.add_argument("--outdir", default=str(OUT_DIR))
     args = ap.parse_args()
     outdir = Path(args.outdir)
+    mixing = args.mixing
+    mixing_idx = MIXINGS.index(mixing)
 
     if args.smoke:
-        run_smoke(outdir)
+        run_smoke(outdir, mixing, mixing_idx)
         return
 
     # ---- lockfile
@@ -422,6 +473,8 @@ def main():
             shutil.rmtree(outdir)
         outdir.mkdir(parents=True, exist_ok=True)
 
+        print(f"[config] mixing={mixing} "
+              f"(s_enters_mixing={mixing == 'nonlinear'})", flush=True)
         written, total_cells = [], 0
         for scaling_idx, scaling in enumerate(SCALINGS):
             cells = []
@@ -429,12 +482,12 @@ def main():
                 for s_idx, s in enumerate(S_GRID):
                     print(f"[cell] {scaling:<12} d_latent={d_latent:<3} "
                           f"s={s} ...", flush=True)
-                    cell = run_cell(scaling, scaling_idx, d_idx, d_latent,
-                                    s_idx, s, DRAWS_PER_CELL)
+                    cell = run_cell(mixing, mixing_idx, scaling, scaling_idx,
+                                    d_idx, d_latent, s_idx, s, DRAWS_PER_CELL)
                     cells.append(cell)
                     print(f"       rate={cell['reject_rate']:.4f} "
                           f"({cell['n_reject']}/{cell['n_draws']})", flush=True)
-            path, n = write_scaling(scaling, cells, gate_cfg, outdir)
+            path, n = write_scaling(scaling, cells, gate_cfg, outdir, mixing)
             written.append(path)
             total_cells += n
             print(f"[write] {path}  ({n} cells)", flush=True)
