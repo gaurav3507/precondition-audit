@@ -85,6 +85,14 @@ SCALINGS = ("raw", "standardise")   # the two the lane uses; standardise is 80's
 MIXINGS = ("linear", "nonlinear")   # default linear: the valid regime
 D_OBS = 200                     # observed dimension D, mirrors gate2
 
+# --- iv-scale sweep (--iv-scale-sweep): a real swept axis in the VALID regime.
+# Intervention magnitude replaces the (linear-inert) nonlinearity scale s. The
+# grid is deliberately reduced so the run is affordable.
+IV_SCALE_GRID = (0.5, 1.0, 2.0, 4.0)
+IV_D_LATENT_GRID = (5, 20, 80)
+IV_SCALINGS = ("standardise",)
+IVSCALE_OUT_DIR = REPO / "results" / "decay_ivscale"
+
 # Recorded so the artefact names the rules it used rather than implying them.
 DECISION_RULE_ID = ("reject_rank2_cf from 80_ranktest_core.rank_diagnostic: "
                     "LFC test of H0 rank<=2 at level alpha, reject when the "
@@ -128,7 +136,7 @@ def crossing_level(n_draws):
 
 
 # =============================================================== one draw
-def one_draw(d_latent, D, n, s, scaling, mixing, main_seed, iv_seed):
+def one_draw(d_latent, D, n, s, scaling, mixing, main_seed, iv_seed, iv_scale=None):
     """One synthetic realisation, decided by 80's reject_rank2_cf.
 
     mixing="linear"    : the proper full-rank Gaussian linear map gate0 and
@@ -148,6 +156,12 @@ def one_draw(d_latent, D, n, s, scaling, mixing, main_seed, iv_seed):
     make_scm, sample_latent, mix_linear, mix_mlp, add_obs_noise and split_pools
     are 81's; standardise, fit_pca, project, null_band_from_pool and
     rank_diagnostic are 80's.
+
+    iv_scale (default None) is forwarded ONLY to the hard-intervention
+    environment draw. None keeps 81's random U(2,4) magnitude byte-for-byte, so
+    the default and --mixing paths are unchanged; a float fixes the intervened
+    node's variance, which is what --iv-scale-sweep sweeps. The control draw
+    takes no intervention and never sees it.
     """
     d = min(10, d_latent)                  # projection dimension, as in gate2
     n_total = 10 * n
@@ -189,7 +203,7 @@ def one_draw(d_latent, D, n, s, scaling, mixing, main_seed, iv_seed):
     rng_iv = np.random.default_rng(iv_seed)
     nodes = rng_iv.choice(d_latent, size=1, replace=False)
     Ze = ORACLE.sample_latent(B, nv, n, rng, kind="hard", nodes=nodes,
-                              rng_iv=rng_iv)
+                              rng_iv=rng_iv, iv_scale=iv_scale)
     Xe = ORACLE.add_obs_noise(mix(Ze), sd, rng)
     if scaling == "standardise":
         Xe = CORE.standardise(Xe, Xc_raw[basis_i])
@@ -420,6 +434,113 @@ def run_smoke(outdir, mixing, mixing_idx):
     print("SMOKE COMPLETE", flush=True)
 
 
+# =========================================================== iv-scale sweep
+def iv_cell_seeds(d_idx, iv_idx, draw):
+    """Distinct reproducible seeds for the iv-scale sweep, in their own band so
+    they never collide with the s-sweep's cell_seeds. No draw is special-cased."""
+    off = 900_000_000 + d_idx * 5_000_000 + iv_idx * 800_000 + draw
+    return off, off + 100_000_000
+
+
+def run_iv_cell(d_idx, d_latent, iv_idx, iv_scale, n_draws):
+    """One (d, iv_scale) cell: linear mixing, standardise, hard k=1 at a FIXED
+    intervention magnitude iv_scale. s is inert under linear mixing and is not
+    swept here; iv_scale is."""
+    rejects = []
+    for draw in range(n_draws):
+        ms, ivs = iv_cell_seeds(d_idx, iv_idx, draw)
+        rejects.append(one_draw(d_latent, D_OBS, N_E, 0.0, "standardise",
+                                "linear", ms, ivs, iv_scale=iv_scale))
+    rate = float(np.mean(rejects)) if rejects else None
+    return dict(swept_axis="iv_scale", mixing="linear", scaling="standardise",
+                d_latent=int(d_latent), d_projection=int(min(10, d_latent)),
+                iv_scale=float(iv_scale),
+                s=float(iv_scale),   # s-slot holds iv_scale so bracket_s_star reuses cleanly
+                n_draws=int(n_draws), reject_rate=rate,
+                n_reject=int(np.sum(rejects)))
+
+
+def write_ivscale(cells, gate_cfg, outdir):
+    level = crossing_level(DRAWS_PER_CELL)
+    brackets_by_d = {}
+    for d in IV_D_LATENT_GRID:
+        rows = [c for c in cells if c["d_latent"] == d]
+        if len(rows) == len(IV_SCALE_GRID):
+            # bracket_s_star brackets over the value in each row's "s" slot,
+            # which for these cells holds iv_scale. The s* logic is reused, the
+            # axis is iv_scale.
+            brackets_by_d[d] = bracket_s_star(rows, level)
+    payload = dict(
+        swept_axis="iv_scale",
+        mixing="linear",
+        iv_scale_enters_intervention=True,
+        scaling="standardise",
+        config=dict(
+            swept_axis="iv_scale",
+            mixing="linear",
+            iv_scale_enters_intervention=True,
+            iv_scale_grid=list(IV_SCALE_GRID),
+            d_latent_grid=list(IV_D_LATENT_GRID),
+            scalings=list(IV_SCALINGS),
+            n_e=N_E, draws_per_cell=DRAWS_PER_CELL, D=D_OBS,
+            alpha=ORACLE.ALPHA, B_null=ORACLE.B_NULL,
+            crossing_level=level,
+            crossing_level_id=("alpha + 2 Monte-Carlo SE at draws_per_cell, "
+                               "reused from 81.gate0's over-rejection boundary"),
+            bracket_field_semantics=("iv_scale_bracket_per_d reuses the s* "
+                                     "bracket helper; its s_lo, s_hi and s_grid "
+                                     "fields hold iv_scale values, not the "
+                                     "nonlinearity scale s"),
+        ),
+        crossing_level=level,
+        cells=cells,
+        iv_scale_bracket_per_d={str(d): b for d, b in brackets_by_d.items()},
+        coarse_trend=coarse_trend(brackets_by_d) if brackets_by_d else None,
+        n_cells=len(cells),
+        n_cells_expected=len(IV_D_LATENT_GRID) * len(IV_SCALE_GRID),
+        provenance=provenance(gate_cfg),
+        contains_no_test_on_real_data=True,
+        disclaimer=("SYNTHETIC ONLY. Intervention-magnitude sweep under linear "
+                    "mixing, the valid regime. No real dataset was touched and "
+                    "no assumption verdict is expressed or implied."),
+    )
+    path = outdir / f"{utc_stamp()}__decay_ivscale_standardise.json"
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return path, len(cells)
+
+
+def run_ivscale_sweep(outdir, gate_cfg):
+    if outdir.exists():
+        print(f"[clean] rm -rf {outdir}", flush=True)
+        shutil.rmtree(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    print("[config] swept_axis=iv_scale mixing=linear "
+          "iv_scale_enters_intervention=true "
+          f"iv_scale_grid={list(IV_SCALE_GRID)} "
+          f"d_latent_grid={list(IV_D_LATENT_GRID)} scalings={list(IV_SCALINGS)}",
+          flush=True)
+    cells = []
+    for d_idx, d_latent in enumerate(IV_D_LATENT_GRID):
+        for iv_idx, iv_scale in enumerate(IV_SCALE_GRID):
+            print(f"[cell] standardise d_latent={d_latent:<3} "
+                  f"iv_scale={iv_scale} ...", flush=True)
+            cell = run_iv_cell(d_idx, d_latent, iv_idx, iv_scale, DRAWS_PER_CELL)
+            cells.append(cell)
+            print(f"       rate={cell['reject_rate']:.4f} "
+                  f"({cell['n_reject']}/{cell['n_draws']})", flush=True)
+    want = len(IV_D_LATENT_GRID) * len(IV_SCALE_GRID)     # 3 x 4 x 1 = 12
+    path, n = write_ivscale(cells, gate_cfg, outdir)
+    print(f"[write] {path}  ({n} cells)", flush=True)
+    print("\n" + "=" * 70)
+    print(f" cells: {n} of {want}")
+    print("=" * 70)
+    if n != want:
+        print(f"[fatal] SHORTFALL: {n} cells for {want} requested.",
+              file=sys.stderr)
+        sys.exit(1)
+    print(f" RESULT: PASS, all {want} iv_scale cells produced.", flush=True)
+
+
 # =============================================================== main
 def main():
     ap = argparse.ArgumentParser()
@@ -427,6 +548,9 @@ def main():
                     help="one d=80 s=0.01 cell both scalings, gate, timing")
     ap.add_argument("--mixing", choices=MIXINGS, default="linear",
                     help="linear (default, the valid regime) or nonlinear")
+    ap.add_argument("--iv-scale-sweep", action="store_true",
+                    help="sweep intervention magnitude iv_scale (linear regime, "
+                         "reduced grid) instead of nonlinearity scale s")
     ap.add_argument("--outdir", default=str(OUT_DIR))
     args = ap.parse_args()
     outdir = Path(args.outdir)
@@ -466,6 +590,13 @@ def main():
                   f"known answer did not pass, so no grid number is "
                   f"trustworthy. Writing nothing.", file=sys.stderr)
             sys.exit(1)
+
+        # ---- iv-scale sweep: a real swept axis in the valid regime. The
+        # gate above has already run; this branch replaces the S_GRID sweep and
+        # writes to results/decay_ivscale/, not results/decay/.
+        if args.iv_scale_sweep:
+            run_ivscale_sweep(IVSCALE_OUT_DIR, gate_cfg)
+            return
 
         # ---- fresh output directory.
         if outdir.exists():

@@ -122,7 +122,7 @@ def make_scm(d_latent, rng, edge_prob=0.4):
     return B, noise_var, is_source
 
 
-def sample_latent(B, noise_var, n, rng, kind=None, nodes=(), rng_iv=None):
+def sample_latent(B, noise_var, n, rng, kind=None, nodes=(), rng_iv=None, iv_scale=None):
     """Z = B Z + D^{1/2} eps (+ shift). Returns (n, d_latent)."""
     d = len(noise_var)
     Be, nv, shift = B.copy(), noise_var.copy(), np.zeros(d)
@@ -130,7 +130,8 @@ def sample_latent(B, noise_var, n, rng, kind=None, nodes=(), rng_iv=None):
     for i in nodes:
         if kind == "hard":
             Be[i, :] = 0.0
-            nv[i] = float(riv.uniform(2.0, 4.0))     # distinct from U(0.5,1.5)
+            nv[i] = (float(riv.uniform(2.0, 4.0)) if iv_scale is None
+                     else float(iv_scale))           # iv_scale=None keeps the U(2,4) draw
         elif kind == "soft":
             nv[i] = nv[i] * float(riv.uniform(2.5, 4.0))
         elif kind == "shift":
