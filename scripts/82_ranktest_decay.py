@@ -93,6 +93,19 @@ IV_D_LATENT_GRID = (5, 20, 80)
 IV_SCALINGS = ("standardise",)
 IVSCALE_OUT_DIR = REPO / "results" / "decay_ivscale"
 
+# --- k sweep (--k-sweep): vary the NUMBER of intervened nodes at fixed
+# magnitude, linear regime. k=1,2 sit inside H0(2) (rank <= 2), k>=3 exceeds
+# it, so this axis crosses the null boundary and has a real detection
+# threshold; gate1's own power regime is k>=3 (81:321-322). Node selection
+# matches gate1 (rng_iv.choice size=k). Magnitude is FIXED at
+# K_IV_SCALE_FIXED, a deliberate deviation from gate1's random U(2,4) draw so
+# that k is the ONLY thing varying; recorded in the artefact.
+K_GRID = (1, 2, 3, 5)
+K_D_LATENT_GRID = (5, 20, 80)
+K_SCALINGS = ("standardise",)
+K_IV_SCALE_FIXED = 2.0
+KSWEEP_OUT_DIR = REPO / "results" / "decay_ksweep"
+
 # Recorded so the artefact names the rules it used rather than implying them.
 DECISION_RULE_ID = ("reject_rank2_cf from 80_ranktest_core.rank_diagnostic: "
                     "LFC test of H0 rank<=2 at level alpha, reject when the "
@@ -136,7 +149,7 @@ def crossing_level(n_draws):
 
 
 # =============================================================== one draw
-def one_draw(d_latent, D, n, s, scaling, mixing, main_seed, iv_seed, iv_scale=None):
+def one_draw(d_latent, D, n, s, scaling, mixing, main_seed, iv_seed, iv_scale=None, k_nodes=1):
     """One synthetic realisation, decided by 80's reject_rank2_cf.
 
     mixing="linear"    : the proper full-rank Gaussian linear map gate0 and
@@ -201,7 +214,14 @@ def one_draw(d_latent, D, n, s, scaling, mixing, main_seed, iv_seed, iv_scale=No
     band = CORE.null_band_from_pool(Yp, n, ORACLE.B_NULL, ORACLE.ALPHA, rng)
 
     rng_iv = np.random.default_rng(iv_seed)
-    nodes = rng_iv.choice(d_latent, size=1, replace=False)
+    if k_nodes == 1:
+        # Default and existing modes (plain sweep, --iv-scale-sweep): unchanged.
+        nodes = rng_iv.choice(d_latent, size=1, replace=False)
+    else:
+        # --k-sweep only: gate1's own selection pattern at size=k
+        # (81_ranktest_oracle.gate1: nodes = rng_iv.choice(dl, size=k,
+        # replace=False)). Identical call shape, k instead of 1.
+        nodes = rng_iv.choice(d_latent, size=k_nodes, replace=False)
     Ze = ORACLE.sample_latent(B, nv, n, rng, kind="hard", nodes=nodes,
                               rng_iv=rng_iv, iv_scale=iv_scale)
     Xe = ORACLE.add_obs_noise(mix(Ze), sd, rng)
@@ -541,6 +561,124 @@ def run_ivscale_sweep(outdir, gate_cfg):
     print(f" RESULT: PASS, all {want} iv_scale cells produced.", flush=True)
 
 
+# ================================================================ k sweep
+def k_cell_seeds(d_idx, k_idx, draw):
+    """Distinct reproducible seeds for the k sweep, in their own band so they
+    never collide with cell_seeds or iv_cell_seeds. No draw is special-cased."""
+    off = 1_500_000_000 + d_idx * 5_000_000 + k_idx * 800_000 + draw
+    return off, off + 100_000_000
+
+
+def run_k_cell(d_idx, d_latent, k_idx, k_nodes, n_draws):
+    """One (d, k) cell: linear mixing, standardise, hard intervention on
+    k_nodes nodes at FIXED magnitude K_IV_SCALE_FIXED. k is the only swept
+    variable; magnitude and everything else are held."""
+    rejects = []
+    for draw in range(n_draws):
+        ms, ivs = k_cell_seeds(d_idx, k_idx, draw)
+        rejects.append(one_draw(d_latent, D_OBS, N_E, 0.0, "standardise",
+                                "linear", ms, ivs,
+                                iv_scale=K_IV_SCALE_FIXED, k_nodes=k_nodes))
+    rate = float(np.mean(rejects)) if rejects else None
+    return dict(swept_axis="k_nodes", mixing="linear", scaling="standardise",
+                intervention_kind="hard",
+                d_latent=int(d_latent), d_projection=int(min(10, d_latent)),
+                k_nodes=int(k_nodes), iv_scale_fixed=float(K_IV_SCALE_FIXED),
+                s=float(k_nodes),   # s-slot holds k so bracket_s_star reuses cleanly
+                n_draws=int(n_draws), reject_rate=rate,
+                n_reject=int(np.sum(rejects)))
+
+
+def write_ksweep(cells, gate_cfg, outdir):
+    level = crossing_level(DRAWS_PER_CELL)
+    brackets_by_d = {}
+    for d in K_D_LATENT_GRID:
+        rows = [c for c in cells if c["d_latent"] == d]
+        if len(rows) == len(K_GRID):
+            # bracket_s_star brackets over each row's "s" slot, which here
+            # holds k. The bracket helper is reused; the axis is k_nodes.
+            brackets_by_d[d] = bracket_s_star(rows, level)
+    payload = dict(
+        swept_axis="k_nodes",
+        mixing="linear",
+        intervention_kind="hard",
+        iv_scale_fixed=float(K_IV_SCALE_FIXED),
+        k_grid=list(K_GRID),
+        scaling="standardise",
+        config=dict(
+            swept_axis="k_nodes",
+            mixing="linear",
+            intervention_kind="hard",
+            iv_scale_fixed=float(K_IV_SCALE_FIXED),
+            iv_scale_fixed_note=("deliberate deviation from gate1, which draws "
+                                 "each node magnitude from U(2,4); fixed here "
+                                 "so k is the only varying axis"),
+            node_selection=("rng_iv.choice(d_latent, size=k, replace=False), "
+                            "gate1's own pattern"),
+            k_grid=list(K_GRID),
+            d_latent_grid=list(K_D_LATENT_GRID),
+            scalings=list(K_SCALINGS),
+            n_e=N_E, draws_per_cell=DRAWS_PER_CELL, D=D_OBS,
+            alpha=ORACLE.ALPHA, B_null=ORACLE.B_NULL,
+            crossing_level=level,
+            crossing_level_id=("alpha + 2 Monte-Carlo SE at draws_per_cell, "
+                               "reused from 81.gate0's over-rejection boundary"),
+            bracket_field_semantics=("k_bracket_per_d reuses the s* bracket "
+                                     "helper; its s_lo, s_hi and s_grid fields "
+                                     "hold k values, not the nonlinearity "
+                                     "scale s"),
+            null_geometry=("H0: rank<=2. k=1 hard is rank 1 or 2 (inside or "
+                           "on the null boundary); k>=3 exceeds it. The "
+                           "crossing in k is the real detection threshold."),
+        ),
+        crossing_level=level,
+        cells=cells,
+        k_bracket_per_d={str(d): b for d, b in brackets_by_d.items()},
+        coarse_trend=coarse_trend(brackets_by_d) if brackets_by_d else None,
+        n_cells=len(cells),
+        n_cells_expected=len(K_D_LATENT_GRID) * len(K_GRID),
+        provenance=provenance(gate_cfg),
+        contains_no_test_on_real_data=True,
+        disclaimer=("SYNTHETIC ONLY. Intervened-node-count sweep under linear "
+                    "mixing, the valid regime. No real dataset was touched and "
+                    "no assumption verdict is expressed or implied."),
+    )
+    path = outdir / f"{utc_stamp()}__decay_ksweep_standardise.json"
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+    return path, len(cells)
+
+
+def run_ksweep(outdir, gate_cfg):
+    if outdir.exists():
+        print(f"[clean] rm -rf {outdir}", flush=True)
+        shutil.rmtree(outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    print("[config] swept_axis=k_nodes mixing=linear intervention_kind=hard "
+          f"iv_scale_fixed={K_IV_SCALE_FIXED} k_grid={list(K_GRID)} "
+          f"d_latent_grid={list(K_D_LATENT_GRID)} scalings={list(K_SCALINGS)}",
+          flush=True)
+    cells = []
+    for d_idx, d_latent in enumerate(K_D_LATENT_GRID):
+        for k_idx, k_nodes in enumerate(K_GRID):
+            print(f"[cell] standardise d_latent={d_latent:<3} "
+                  f"k={k_nodes} ...", flush=True)
+            cell = run_k_cell(d_idx, d_latent, k_idx, k_nodes, DRAWS_PER_CELL)
+            cells.append(cell)
+            print(f"       rate={cell['reject_rate']:.4f} "
+                  f"({cell['n_reject']}/{cell['n_draws']})", flush=True)
+    want = len(K_D_LATENT_GRID) * len(K_GRID)     # 3 x 4 x 1 = 12
+    path, n = write_ksweep(cells, gate_cfg, outdir)
+    print(f"[write] {path}  ({n} cells)", flush=True)
+    print("\n" + "=" * 70)
+    print(f" cells: {n} of {want}")
+    print("=" * 70)
+    if n != want:
+        print(f"[fatal] SHORTFALL: {n} cells for {want} requested.",
+              file=sys.stderr)
+        sys.exit(1)
+    print(f" RESULT: PASS, all {want} k cells produced.", flush=True)
+
+
 # =============================================================== main
 def main():
     ap = argparse.ArgumentParser()
@@ -551,11 +689,19 @@ def main():
     ap.add_argument("--iv-scale-sweep", action="store_true",
                     help="sweep intervention magnitude iv_scale (linear regime, "
                          "reduced grid) instead of nonlinearity scale s")
+    ap.add_argument("--k-sweep", action="store_true",
+                    help="sweep the NUMBER of intervened nodes k at fixed "
+                         "magnitude (linear regime, reduced grid); k crosses "
+                         "the H0 rank<=2 boundary at k=3")
     ap.add_argument("--outdir", default=str(OUT_DIR))
     args = ap.parse_args()
     outdir = Path(args.outdir)
     mixing = args.mixing
     mixing_idx = MIXINGS.index(mixing)
+
+    if args.iv_scale_sweep and args.k_sweep:
+        sys.exit("[fatal] --iv-scale-sweep and --k-sweep are mutually "
+                 "exclusive: one swept axis at a time.")
 
     if args.smoke:
         run_smoke(outdir, mixing, mixing_idx)
@@ -596,6 +742,12 @@ def main():
         # writes to results/decay_ivscale/, not results/decay/.
         if args.iv_scale_sweep:
             run_ivscale_sweep(IVSCALE_OUT_DIR, gate_cfg)
+            return
+
+        # ---- k sweep: vary intervened-node count at fixed magnitude. The
+        # gate above has already run; writes to results/decay_ksweep/ only.
+        if args.k_sweep:
+            run_ksweep(KSWEEP_OUT_DIR, gate_cfg)
             return
 
         # ---- fresh output directory.
